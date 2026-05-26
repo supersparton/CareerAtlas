@@ -1,0 +1,12 @@
+[TARGET ROLE]
+Backend Software Engineer or AI Agent Developer
+
+[CORE SKILLS]
+Python, Django, FastAPI, SQL, Git, and LLMs
+
+[EXPERIENCE LEVEL]
+Junior (0-2 years experience)
+
+[PREFERENCES]
+Remote or Hybrid, tech-focused startups, no cold-sales or marketing roles
+
