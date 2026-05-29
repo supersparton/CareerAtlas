@@ -1,10 +1,9 @@
 {
-  "name": "backend",
+  "name": "career-os-backend",
   "version": "0.0.1",
   "description": "",
   "author": "",
   "private": true,
-  "type" :"module",
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
@@ -21,9 +20,14 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.48",
+    "@langchain/groq": "^1.2.1",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "langchain": "^1.4.2",
+    "playwright": "^1.60.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
