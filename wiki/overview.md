@@ -11,7 +11,7 @@ CareerAtlas, also called CareerOS in the project context, is an autonomous AI jo
 
 The backend is the active execution layer. `AgentService` orchestrates the workflow, `DiscoveryService` scrapes LinkedIn with Playwright, `IntelligenceService` scores jobs with Groq via LangChain, `MemoryService` tracks seen jobs through SHA-256 hashes, and `NotifierService` sends alerts through Telegram.[^6][^7][^8][^9][^10]
 
-The frontend exists as a separate Next.js app, but its current page and layout are still default create-next-app content rather than a product surface.[^11][^12][^13]
+The frontend exists as a separate Next.js app, but its current page, layout, and CSS are still default create-next-app content rather than a product surface.[^11][^12][^13]
 
 ## Current Status
 
@@ -22,6 +22,7 @@ The frontend exists as a separate Next.js app, but its current page and layout a
 | Deduplication | Implemented | `seen_jobs.json` is a flat hash store keyed by title and company.[^9] |
 | Telegram alerts | Implemented | Alerting uses native `fetch` against the Telegram Bot API.[^10] |
 | Frontend product UI | Not yet built | `frontend/app/page.tsx` is the default starter page.[^11] |
+| Frontend source files | Scaffolding only | `page.tsx`, `layout.tsx`, and `globals.css` are still starter files.[^11][^12][^13] |
 | Project documentation | Centralized in ai-context | `ai-context/` holds the current operating docs and roadmap.[^1][^2][^3][^4] |
 
 ## Key Findings
@@ -29,6 +30,7 @@ The frontend exists as a separate Next.js app, but its current page and layout a
 - The project is organized around one autonomous workflow rather than a manual job board browsing app.[^1][^2]
 - The live code already reflects the NestJS migration described in the project notes.[^1][^3][^6]
 - The frontend has the modern Next.js 16 and React 19 stack, but the UI has not yet been replaced with product-specific views.[^5][^11][^12][^13]
+- The frontend source tree currently consists of the default app shell plus `favicon.ico`, so there is no implemented CareerAtlas-facing web experience yet.[^11][^12][^13]
 - `profile.txt` remains the user-editable career target input for scoring decisions.[^8]
 
 ## Runtime Overview

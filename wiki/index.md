@@ -12,8 +12,9 @@ This is the entry point for the CareerAtlas wiki. Start here, then follow the li
 1. Read this page first.
 2. Read [Overview](overview.md) for the current project summary.
 3. Read [Architecture](concepts/architecture.md) for the runtime flow.
-4. Read [Core Modules](entities/core-modules.md) for service-level responsibilities.
-5. Read [Log](log.md) for the latest changes.
+4. Read [Core Modules](entities/core-modules.md) for backend service-level responsibilities.
+5. Read [Frontend App](entities/frontend-app.md) for the current web app scaffold.
+6. Read [Log](log.md) for the latest changes.
 
 ## Update Protocol
 
@@ -31,6 +32,7 @@ When the codebase changes, update the wiki in this order:
 | Backend orchestration | Scrape, dedupe, score, alert loop | [backend/src/agent/agent.service.ts](../backend/src/agent/agent.service.ts), [backend/src/discovery/discovery.service.ts](../backend/src/discovery/discovery.service.ts), [backend/src/intelligence/intelligence.service.ts](../backend/src/intelligence/intelligence.service.ts), [backend/src/memory/memory.service.ts](../backend/src/memory/memory.service.ts), [backend/src/notifier/notifier.service.ts](../backend/src/notifier/notifier.service.ts) |
 | Project context | Intent, rules, progress, changelog | [ai-context/AGENTS.md](../ai-context/AGENTS.md), [ai-context/ARCHITECTURE.md](../ai-context/ARCHITECTURE.md), [ai-context/PROGRESS.md](../ai-context/PROGRESS.md), [ai-context/RULES.md](../ai-context/RULES.md), [ai-context/CHANGELOG.md](../ai-context/CHANGELOG.md) |
 | Stack and UI | Workspace stack and frontend scaffold | [techstack.md](../techstack.md), [frontend/app/page.tsx](../frontend/app/page.tsx), [frontend/app/layout.tsx](../frontend/app/layout.tsx), [frontend/app/globals.css](../frontend/app/globals.css) |
+| Web app wiki | Current frontend findings and source map | [Frontend App](entities/frontend-app.md) |
 
 ## Relationship Map
 
@@ -39,6 +41,7 @@ graph TD
     A[CareerAtlas Index] --> B[Overview]
     A --> C[Architecture]
     A --> D[Core Modules]
+    A --> I[Frontend App]
     A --> E[Log]
     C --> F[Agent Loop]
     D --> G[Backend Services]

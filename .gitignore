@@ -1,2 +1,5 @@
 .env
 docs
+.vscode
+*.json
+techstack.md

@@ -13,6 +13,12 @@ tags: [careeratlas, log, history, changelog]
 - Captured the current backend agent loop, stack, and frontend scaffold
 - Key takeaway: the project already has an implemented NestJS job-hunting core, while the frontend remains a starter scaffold.
 
+## [2026-05-30] ingest | Frontend Web App Page
+- Created the frontend page at [Frontend App](entities/frontend-app.md)
+- Added the frontend page to the wiki index and relationship map
+- Captured the current web app source files: `page.tsx`, `layout.tsx`, `globals.css`
+- Key takeaway: the frontend is still a starter Next.js shell with no product-specific CareerAtlas UI yet.
+
 [^1]: ai-context/AGENTS.md
 [^2]: ai-context/ARCHITECTURE.md
 [^3]: backend/src/agent/agent.service.ts
