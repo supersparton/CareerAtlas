@@ -33,12 +33,16 @@
 
 | File | Purpose |
 | :--- | :--- |
-| `src/agent/agent.service.ts` | 🧠 **Main Orchestrator.** Replicates the Hermes Agent ReAct loop: scrape → deduplicate → score → alert. |
-| `src/discovery/discovery.service.ts` | 🕸️ **Scraper.** Uses Playwright to headlessly scrape dynamic job boards like LinkedIn. |
+| `src/agent/agent.service.ts` | 🧠 **Main Orchestrator.** Replicates the Hermes Agent ReAct loop: scrape → deduplicate → score → alert. Extracts location dynamically. |
+| `src/discovery/discovery.module.ts` | 🕸️ **Discovery Module.** Wires and exports the parallel scraper agents. |
+| `src/discovery/linkedin.agent.ts` | 🕵️ **LinkedIn Agent.** Direct Playwright scraper with stealth fingerprint masking, human keyboard typing, and lazy-scrolling card parser. |
+| `src/discovery/career-pages.agent.ts` | 🔗 **Career Pages Agent.** Queries the TinyFish Search API for Lever/Ashby/Workable jobs. |
+| `src/discovery/yc-greenhouse.agent.ts` | 🥬 **Greenhouse/YC Agent.** Queries the TinyFish Search API for Greenhouse/YC job boards. |
+| `src/discovery/wellfound-glassdoor.agent.ts` | 💼 **Wellfound/Glassdoor Agent.** Queries the TinyFish Search API for startup & corporate openings. |
 | `src/intelligence/intelligence.service.ts` | 📊 **Job Scorer.** Uses `@langchain/groq` to score jobs against `profile.txt`. |
 | `src/notifier/notifier.service.ts` | 📲 **Telegram Alerter.** Sends matched job cards to Telegram using native Node `fetch`. |
 | `src/memory/memory.service.ts` | 🗃️ **Agent Memory.** Reads/writes SHA-256 hashes to `seen_jobs.json`. |
-| `profile.txt` | 👤 **User Career Profile.** User-edited file detailing skills and target roles. |
+| `profile.txt` | 👤 **User Career Profile.** User-edited file detailing skills, target roles, and location preferences (e.g. Ahmedabad). |
 | `seen_jobs.json` | 🗃️ **Agent Memory File.** JSON array stored in the project root. |
 | `.env` | 🔒 **Secret Store.** Stored in the root folder. Read by NestJS ConfigModule. |
 
@@ -49,6 +53,7 @@
 | Variable | Service | How to Get |
 | :--- | :--- | :--- |
 | `GROQ_API_KEY` | Groq LLM Inference | [console.groq.com](https://console.groq.com) → API Keys |
+| `TINYFISH_API_KEY` | TinyFish Search API | [agent.tinyfish.ai/api-keys](https://agent.tinyfish.ai/api-keys) |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot | Create bot via `@BotFather` in Telegram |
 | `TELEGRAM_CHAT_ID` | Telegram Chat Target | Get from `getUpdates` after sending bot a message |
 
@@ -67,7 +72,7 @@
 ## 7. Key Technical Decisions & Why
 
 1. **NestJS over Python:** Required because free hosting services (Render, Vercel) have better support and memory profiles for Node/TypeScript services.
-2. **Playwright over TinyFish:** TinyFish gets blocked by LinkedIn's anti-bot protection. Playwright can bypass it using Chromium.
+2. **Playwright + TinyFish Hybrid Scraper:** Playwright is used exclusively for direct LinkedIn scraping to manage page interaction, session authentication, and list scrolling (with fingerprint masking). For Lever, Ashby, Greenhouse, Wellfound, and Glassdoor, we query the TinyFish Search API directly. This provides fresh, real-time listings without search engine indexing delays, bypasses JS-only blocks, and runs 10x faster with zero local browser overhead.
 3. **LangChain for Intelligence:** Provides structured output parsing (Zod/JSON) out-of-the-box, ensuring reliable `JobScore` interfaces.
 4. **Native Fetch over Axios:** Reduces dependency vulnerabilities.
 5. **SHA-256 Hashing for Deduplication:** Storing a hash of `title+company` ensures O(1) lookup without taking up disk space.

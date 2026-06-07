@@ -11,11 +11,11 @@ CareerAtlas is built around a linear agent loop in the NestJS backend: discover 
 
 | Step | Service | Responsibility | Main Output |
 | --- | --- | --- | --- |
-| 1 | DiscoveryService | Launches Playwright, scrapes LinkedIn job cards, and produces `ScrapedJob[]`. | Candidate jobs |
+| 1 | Discovery Agents | Parallel scrapers: Playwright (`LinkedInAgent`) and TinyFish Search API (`CareerPagesAgent`, etc.). | Real-time candidate jobs |
 | 2 | MemoryService | Hashes `title + company` and checks `seen_jobs.json`. | Seen / unseen decision |
 | 3 | IntelligenceService | Loads `profile.txt` and scores the job with Groq + LangChain. | `JobScore` |
 | 4 | NotifierService | Sends a Telegram Markdown alert when the match score is high enough. | Telegram notification |
-| 5 | AgentService | Coordinates the end-to-end workflow and marks jobs as seen. | End-to-end run |
+| 5 | AgentService | Coordinates the end-to-end workflow, extracts location preferences, and loops until 5 matches are saved. | End-to-end run |
 
 ## Backend Module Map
 
@@ -23,17 +23,19 @@ CareerAtlas is built around a linear agent loop in the NestJS backend: discover 
 graph TD
     A[AppModule] --> B[AgentModule]
     B --> C[AgentService]
-    B --> D[DiscoveryService]
-    B --> E[IntelligenceService]
-    B --> F[MemoryService]
-    B --> G[NotifierService]
+    B --> D[DiscoveryModule]
+    D --> E[LinkedInAgent - Playwright]
+    D --> F[CareerPagesAgent - TinyFish]
+    D --> G[YcGreenhouseAgent - TinyFish]
+    D --> H[WellfoundGlassdoorAgent - TinyFish]
 ```
 
 ## Important Implementation Details
 
 - `AppModule` loads `.env` through `ConfigModule` and boots `AgentModule`.[^6]
-- `AgentService` currently starts automatically on application bootstrap and runs one workflow for `software engineer` in `Remote` mode during testing.[^7]
-- `DiscoveryService` uses a Chromium browser with a desktop user agent and limits extraction to the first 10 cards for safety.[^8]
+- `AgentService` starts automatically on application bootstrap, dynamically extracts the user's city/country from `profile.txt` (e.g. Bangalore, Ahmedabad), and loops until 5 high-match jobs are found.[^7]
+- `LinkedInAgent` uses Chromium with custom scripts (blocking WebGL/Canvas fingerprinting, masking webdriver) and human-like typing to scrape jobs securely.[^8]
+- `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` query the **TinyFish Search API** directly, bypassing expired caches and avoiding Playwright execution overhead.
 - `IntelligenceService` uses `ChatGroq` with `llama-3.3-70b-versatile` and parses structured output into `JobScore` fields.[^9]
 - `MemoryService` persists dedupe state as a flat JSON array of SHA-256 strings in `seen_jobs.json`.[^10]
 - `NotifierService` sends Markdown messages to Telegram using native `fetch` and skips alerts when credentials are missing.[^11]
