@@ -5,6 +5,13 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-06-07] upgrade | Integrated TinyFish Search & Playwright LinkedIn Agent
+- Created `LinkedInAgent` (Playwright) with anti-bot fingerprint masking, human-like typing simulation, and login flow.[^3]
+- Refactored `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` to fetch real-time data from the **TinyFish Search API** instead of DuckDuckGo HTML scraping.[^3]
+- Implemented smart location extraction from `profile.txt` to enable searching in local cities (e.g. Bangalore, Ahmedabad) instead of hardcoding US.[^3]
+- Configured MVP threshold to output 5 matching jobs per query cycle.[^3]
+- Updated wiki docs with the new system flow.
+
 ## [2026-05-30] ingest | Initial CareerAtlas Wiki
 - Created the wiki index at [CareerAtlas Wiki Index](index.md)
 - Created the overview at [CareerAtlas Overview](overview.md)

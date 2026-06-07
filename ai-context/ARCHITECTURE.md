@@ -7,14 +7,14 @@
 ## System Data Flow Diagram
 
 ```
-[LinkedIn / Career Pages]
+[Job Boards & Search Indexes]
          │
          ▼
 ┌─────────────────────┐
-│ DiscoveryModule     │  ← Uses Playwright to headlessly scrape dynamic pages
-│ (Playwright)        │
+│ DiscoveryModule     │  ← Multi-agent network (Playwright & TinyFish Search)
+│ (4 parallel agents) │
 └─────────────────────┘
-         │  ScrapedJob[] (title, company, link)
+         │  ScrapedJob[] (title, company, url)
          ▼
 ┌─────────────────────┐
 │  MemoryModule       │  ← SHA-256 hash each job, skip if in seen_jobs.json
@@ -26,7 +26,7 @@
 │   Groq LLM Scorer   │  ← Compare each job to profile.txt (0–100 score)
 │  (llama-3.3-70b)    │
 └─────────────────────┘
-         │  score >= 70?
+         │  score >= 60?
          ▼
 ┌─────────────────────┐
 │  Telegram Notifier  │  ← Send rich Markdown job card to user's phone
@@ -39,14 +39,17 @@
 ## Module Dependency Map
 
 ```
-career-os-backend/src/
+backend/src/
   ├── agent/agent.module.ts (Orchestrator Loop)
   │
   ├── discovery/discovery.module.ts
-  │     └── scrapeLinkedInJobs()  → Playwright Engine
+  │     ├── linkedin.agent.ts               → Direct Playwright Stealth Scraper
+  │     ├── career-pages.agent.ts            → TinyFish Search API (Lever/Ashby)
+  │     ├── yc-greenhouse.agent.ts           → TinyFish Search API (Greenhouse/YC)
+  │     └── wellfound-glassdoor.agent.ts     → TinyFish Search API (Wellfound/Glassdoor)
   │
   ├── intelligence/intelligence.module.ts
-  │     ├── loadProfile()         → ../profile.txt (read)
+  │     ├── loadProfile()         → ../profile.txt (read & parse target location)
   │     └── scoreJob()            → Langchain + Groq API
   │
   ├── memory/memory.module.ts
@@ -62,9 +65,11 @@ career-os-backend/src/
 
 | Board | URL | Reliability | Notes |
 | :--- | :--- | :--- | :--- |
-| Hacker News Jobs | `https://news.ycombinator.com/jobs` | ✅ Excellent | 100% static HTML, always works |
-| Greenhouse | `https://boards.greenhouse.io/{company}` | ✅ Good | Most companies list jobs directly |
-| Ashby ATS | `https://jobs.ashbyhq.com/{company}` | ❌ Blocked | JavaScript-only, TinyFish gets blocked |
+| LinkedIn | `https://linkedin.com/jobs` | ✅ Upgraded | Direct Playwright scraping with stealth fingerprint masking and custom human emulated login |
+| Greenhouse / YC | `https://boards.greenhouse.io` | ✅ Excellent | Real-time queries via TinyFish Search API |
+| Lever / Ashby / Workable | `https://lever.co` | ✅ Excellent | Real-time queries via TinyFish Search API, bypassing JS-only blocks |
+| Wellfound / Glassdoor | `https://wellfound.com/jobs` | ✅ Excellent | Real-time queries via TinyFish Search API |
+
 
 ---
 

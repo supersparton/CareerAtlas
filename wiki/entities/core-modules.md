@@ -9,11 +9,14 @@ The CareerAtlas backend is decomposed into a focused set of NestJS services. Eac
 
 ## Service Responsibilities
 
-| Service | Responsibility | Key Methods / Behavior |
+| Service / Agent | Responsibility | Key Methods / Behavior |
 | --- | --- | --- |
-| AgentService | Orchestrates the full workflow. | `onApplicationBootstrap()`, `runWorkflow()` |
-| DiscoveryService | Scrapes job listings with Playwright. | `scrapeLinkedInJobs()` |
-| IntelligenceService | Loads the user profile and scores jobs using Groq. | `scoreJob()` |
+| AgentService | Orchestrates the workflow loop, extracts location, and filters results. | `onApplicationBootstrap()`, `runWorkflow()` |
+| LinkedInAgent | Scrapes LinkedIn directly with Playwright Chromium under fingerprint masking. | `findJobs(searchTerm, locationPref, page)` |
+| CareerPagesAgent | Queries TinyFish Search API for Lever/Ashby/Workable links. | `findJobs(searchTerm, locationPref, page)` |
+| YcGreenhouseAgent | Queries TinyFish Search API for Greenhouse/YC job boards. | `findJobs(searchTerm, locationPref, page)` |
+| WellfoundGlassdoorAgent | Queries TinyFish Search API for Wellfound/Glassdoor job boards. | `findJobs(searchTerm, locationPref, page)` |
+| IntelligenceService | Scores scraped jobs against `profile.txt` using Groq Llama 3.3. | `scoreJob()` |
 | MemoryService | Creates and checks SHA-256 job fingerprints. | `isJobSeen()`, `markJobAsSeen()`, `generateJobHash()` |
 | NotifierService | Sends Telegram alerts for strong matches. | `sendJobAlert()` |
 | AppModule | Wires configuration and the main agent module. | `ConfigModule.forRoot()`, `AgentModule` |
@@ -23,20 +26,21 @@ The CareerAtlas backend is decomposed into a focused set of NestJS services. Eac
 ```mermaid
 sequenceDiagram
     participant Agent as AgentService
-    participant Discovery as DiscoveryService
+    participant Discovery as Discovery Agents
     participant Memory as MemoryService
     participant Intelligence as IntelligenceService
     participant Notifier as NotifierService
 
-    Agent->>Discovery: scrapeLinkedInJobs()
-    Discovery-->>Agent: jobs[]
+    Note over Agent: Extract role & location preference from profile.txt
+    Agent->>Discovery: Parallel findJobs(searchTerm, locationPref, page)
+    Discovery-->>Agent: Combined ScrapedJob[]
     loop each job
         Agent->>Memory: isJobSeen()
         alt unseen
             Agent->>Intelligence: scoreJob()
             Intelligence-->>Agent: JobScore
             Agent->>Memory: markJobAsSeen()
-            alt strong match
+            alt score >= 60
                 Agent->>Notifier: sendJobAlert()
             end
         end
@@ -45,8 +49,9 @@ sequenceDiagram
 
 ## What Each Module Depends On
 
-- `AgentService` depends on all worker services plus notifications.[^1]
-- `DiscoveryService` depends on Playwright and the LinkedIn public jobs DOM.[^2]
+- `AgentService` depends on all four discovery agents plus intelligence, memory, and notification services.[^1]
+- `LinkedInAgent` depends on Playwright Chromium browser contexts, user-agent/locale settings, and local cookie authentication.[^2]
+- `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` depend on the **TinyFish Search API** and your `TINYFISH_API_KEY` credential.
 - `IntelligenceService` depends on `profile.txt`, Groq API credentials, and LangChain structured parsing.[^3]
 - `MemoryService` depends only on the local filesystem and SHA-256 hashing.[^4]
 - `NotifierService` depends on Telegram credentials and the global `fetch` API.[^5]

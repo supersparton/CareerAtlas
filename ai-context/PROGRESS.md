@@ -66,8 +66,16 @@
 - [x] Migrated from Python to a NestJS/TypeScript architecture (`career-os-backend`).
 - [x] Replicated Hermes Agent ReAct loop using `AgentModule` and LangChain.js.
 - [x] Implemented Playwright in `DiscoveryModule` for robust LinkedIn scraping.
+- [x] Created dedicated Playwright `LinkedInAgent` with browser fingerprint masking and human emulation.
+- [x] Swapped out old, expired DuckDuckGo scraping inside CareerPages, Greenhouse/YC, and Wellfound/Glassdoor agents for the real-time TinyFish Search API.
+- [x] Configured MVP target threshold to return 5 high-match jobs per query.
 - [x] Integrated `IntelligenceModule` with Groq LLM (Llama 3.3) for profile matching.
 - [x] Swapped `axios` for native `fetch` in `NotifierModule` for better security.
+
+**Key Learnings from Phase 4:**
+- DuckDuckGo / general search engine indexed pages return stale and expired links (e.g., job postings that have already closed). Querying the TinyFish Search API directly provides much fresher, real-time results.
+- Injecting custom browser anonymization (overriding `navigator.webdriver`, spoofing languages, and blocking WebGL/Canvas fingerprinting) is essential to bypass bot detection when crawling LinkedIn.
+- Emmitting keyboard presses character-by-character with random delays simulates realistic human typing, avoiding instant blocks on login screens.
 
 ---
 
@@ -84,3 +92,4 @@
 ## 🔄 Changelog
 
 *Note: The Changelog has been moved to `CHANGELOG.md` for more detailed tracking.*
+

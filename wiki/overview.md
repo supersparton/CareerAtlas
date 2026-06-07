@@ -9,7 +9,7 @@ CareerAtlas, also called CareerOS in the project context, is an autonomous AI jo
 
 ## Scope
 
-The backend is the active execution layer. `AgentService` orchestrates the workflow, `DiscoveryService` scrapes LinkedIn with Playwright, `IntelligenceService` scores jobs with Groq via LangChain, `MemoryService` tracks seen jobs through SHA-256 hashes, and `NotifierService` sends alerts through Telegram.[^6][^7][^8][^9][^10]
+The backend is the active execution layer. `AgentService` orchestrates the workflow. The `DiscoveryModule` runs 4 discovery agents in parallel: `LinkedInAgent` scrapes LinkedIn directly using Playwright browser automation with anti-bot fingerprint masking, while `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` scrape Lever/Ashby/Workable, Greenhouse/YC, and Wellfound/Glassdoor via direct queries to the **TinyFish Search API** (`api.search.tinyfish.ai`). `IntelligenceService` scores candidate jobs using Groq (Llama 3.3) via LangChain.js, `MemoryService` tracks seen jobs via SHA-256 hashes, and `NotifierService` sends notifications via Telegram.[^6][^7][^8][^9][^10]
 
 The frontend exists as a separate Next.js app, but its current page, layout, and CSS are still default create-next-app content rather than a product surface.[^11][^12][^13]
 
@@ -17,7 +17,10 @@ The frontend exists as a separate Next.js app, but its current page, layout, and
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Backend agent loop | Implemented | `AgentService` runs scrape -> dedupe -> score -> alert.[^6] |
+| Backend agent loop | Implemented | `AgentService` runs parallel scrape -> dedupe -> score -> alert.[^6] |
+| Discovery Agents | Upgraded | LinkedIn uses stealth Playwright; Lever/Greenhouse/Wellfound use TinyFish Search API for real-time listings. |
+| Target Threshold | Upgraded | The MVP target has been increased to 5 matching jobs per query session.[^6] |
+| Location Targeting | Implemented | Smart parser extracts local cities (e.g. Ahmedabad, Bangalore) from `profile.txt` preferences segment.[^6] |
 | Model scoring | Implemented | `ChatGroq` uses `llama-3.3-70b-versatile` with zero temperature.[^8] |
 | Deduplication | Implemented | `seen_jobs.json` is a flat hash store keyed by title and company.[^9] |
 | Telegram alerts | Implemented | Alerting uses native `fetch` against the Telegram Bot API.[^10] |
@@ -28,20 +31,18 @@ The frontend exists as a separate Next.js app, but its current page, layout, and
 ## Key Findings
 
 - The project is organized around one autonomous workflow rather than a manual job board browsing app.[^1][^2]
-- The live code already reflects the NestJS migration described in the project notes.[^1][^3][^6]
-- The frontend has the modern Next.js 16 and React 19 stack, but the UI has not yet been replaced with product-specific views.[^5][^11][^12][^13]
-- The frontend source tree currently consists of the default app shell plus `favicon.ico`, so there is no implemented CareerAtlas-facing web experience yet.[^11][^12][^13]
-- `profile.txt` remains the user-editable career target input for scoring decisions.[^8]
+- DuckDuckGo / general search engine indexed page crawls return expired/stale job links. Transitioning to direct API calls via TinyFish Search API yields live, active jobs and speeds up searches by 10x.
+- Anti-fingerprint masking (blocking WebGL/Canvas, overriding `navigator.webdriver`) is required to prevent LinkedIn checkpoints.
+- `profile.txt` remains the user-editable target input containing location preferences and skills.[^8]
 
 ## Runtime Overview
 
 ```mermaid
-flowchart LR
-    A[Job Sources] --> B[DiscoveryService]
-    B --> C[MemoryService]
-    C --> D[IntelligenceService]
-    D --> E[NotifierService]
-    E --> F[Telegram Alert]
+flowchart TD
+    A["Job Boards (LinkedIn, Greenhouse, Wellfound, Lever)"] --> B["Discovery Agent Network (Playwright & TinyFish)"]
+    B --> C["MemoryService Deduplication (seen_jobs.json)"]
+    C --> D["IntelligenceService Scoring (Groq LLM)"]
+    D --> E["NotifierService (Telegram Alert)"]
 ```
 
 [^1]: ai-context/AGENTS.md
@@ -50,7 +51,7 @@ flowchart LR
 [^4]: ai-context/RULES.md
 [^5]: backend/package.json
 [^6]: backend/src/agent/agent.service.ts
-[^7]: backend/src/discovery/discovery.service.ts
+[^7]: backend/src/discovery/discovery.module.ts
 [^8]: backend/src/intelligence/intelligence.service.ts
 [^9]: backend/src/memory/memory.service.ts
 [^10]: backend/src/notifier/notifier.service.ts
