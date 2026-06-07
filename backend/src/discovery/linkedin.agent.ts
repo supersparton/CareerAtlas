@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import { ScrapedJob } from './discovery.service';
+import { Job, generateJobId } from './discovery.service';
 
 @Injectable()
 export class LinkedInAgent {
@@ -11,10 +11,10 @@ export class LinkedInAgent {
   private readonly password = process.env.LINKEDIN_PASSWORD;
   private readonly headless = process.env.SCRAPER_HEADLESS !== 'false';
 
-  async findJobs(searchTerm: string, locationPref: string, pageNum: number): Promise<ScrapedJob[]> {
-    this.logger.log(`[LinkedIn Agent] Searching for '${searchTerm}' in '${locationPref}' (Page ${pageNum})...`);
+  async findJobs(searchTerm: string, locationPref: string, pageNum: number): Promise<Job[]> {
+    this.logger.log(`[SCRAPER: LINKEDIN] Searching for '${searchTerm}' in '${locationPref}' (Page ${pageNum})...`);
 
-    const jobs: ScrapedJob[] = [];
+    const jobs: Job[] = [];
     let browser: Browser | null = null;
     let context: BrowserContext | null = null;
 
@@ -55,7 +55,7 @@ export class LinkedInAgent {
       if (isLoggedIn) {
         searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(locationPref)}&start=${(pageNum - 1) * 25}`;
       } else {
-        searchUrl = `https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(locationPref)}&position=1&pageNum=0`;
+        searchUrl = `https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(locationPref)}&start=${(pageNum - 1) * 25}&position=1&pageNum=${pageNum - 1}`;
       }
 
       this.logger.log(`[LinkedIn Agent] Navigating to search URL: ${searchUrl}`);
@@ -117,12 +117,15 @@ export class LinkedInAgent {
 
           if (title && company) {
             description = `LinkedIn job listing for a ${title} position at ${company} in ${loc}.`;
+            const jobId = generateJobId('linkedin', company, title, url || searchUrl);
             jobs.push({
+              jobId,
+              source: 'linkedin',
               title,
               company,
               location: loc,
-              url: url || searchUrl,
-              descriptionSnippet: description,
+              applyUrl: url || searchUrl,
+              description: description,
             });
           }
         } catch (cardErr) {
@@ -138,10 +141,10 @@ export class LinkedInAgent {
       }
     }
 
-    // Fallback if scraping gets blocked
+    // Return scraped jobs or empty list if none found
     if (jobs.length === 0) {
-      this.logger.log('[LinkedIn Agent] Empty scrape results. Triggering fallback jobs.');
-      return this.getFallbackJobs(searchTerm, locationPref, pageNum);
+      this.logger.log('[LinkedIn Agent] No jobs scraped.');
+      return [];
     }
 
     return jobs;
@@ -276,24 +279,5 @@ export class LinkedInAgent {
     } catch (err) {
       this.logger.debug(`[LinkedIn Agent] Scroll failed: ${err.message}`);
     }
-  }
-
-  private getFallbackJobs(searchTerm: string, locationPref: string, pageNum: number): ScrapedJob[] {
-    const list = [
-      { title: 'Backend Software Engineer', company: 'Uber', location: locationPref, url: 'https://www.linkedin.com/jobs/view/uber-backend-engineer', description: 'Design real-time match services and core API engines. Tech stack: Go, Python, Java, Kafka, and PostgreSQL.' },
-      { title: 'AI Automation Engineer', company: 'OpenAI', location: locationPref, url: 'https://www.linkedin.com/jobs/view/openai-ai-automation', description: 'Integrate agent structures, pipeline tooling, and customize prompt frameworks with GPT-4o and Gemini.' },
-      { title: 'Staff Software Architect', company: 'Netflix', location: locationPref, url: 'https://www.linkedin.com/jobs/view/netflix-staff-architect', description: 'Scale streaming data infrastructure and manage distributed systems. Stack includes Java, Scala, and Python.' },
-      { title: 'Junior Software Engineer (Python/FastAPI)', company: 'Pinterest', location: locationPref, url: 'https://www.linkedin.com/jobs/view/pinterest-junior-engineer', description: 'Build and support content ingestion endpoints using FastAPI, Celery, and SQL databases.' },
-    ];
-
-    const startIndex = ((pageNum - 1) * 2) % list.length;
-    const items = list.slice(startIndex, startIndex + 2);
-    return items.map(item => ({
-      title: item.title,
-      company: item.company,
-      location: item.location,
-      url: item.url,
-      descriptionSnippet: item.description,
-    }));
   }
 }

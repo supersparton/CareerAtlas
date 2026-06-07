@@ -1,26 +1,21 @@
 import { Module } from '@nestjs/common';
-import { DiscoveryService } from './discovery.service';
-import { CareerPagesAgent } from './career-pages.agent';
-import { YcGreenhouseAgent } from './yc-greenhouse.agent';
-import { WellfoundGlassdoorAgent } from './wellfound-glassdoor.agent';
+import { AtsPortalsAgent } from './ats-portals.agent';
+import { StartupBoardsAgent } from './startup-boards.agent';
+import { IndiaFocusedAgent } from './india-focused.agent';
 import { LinkedInAgent } from './linkedin.agent';
 
 @Module({
   providers: [
-    DiscoveryService,
-    CareerPagesAgent,
-    YcGreenhouseAgent,
-    WellfoundGlassdoorAgent,
+    AtsPortalsAgent,
+    StartupBoardsAgent,
+    IndiaFocusedAgent,
     LinkedInAgent,
   ],
   exports: [
-    DiscoveryService,
-    CareerPagesAgent,
-    YcGreenhouseAgent,
-    WellfoundGlassdoorAgent,
+    AtsPortalsAgent,
+    StartupBoardsAgent,
+    IndiaFocusedAgent,
     LinkedInAgent,
   ],
 })
 export class DiscoveryModule {}
-
-

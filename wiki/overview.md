@@ -9,7 +9,7 @@ CareerAtlas, also called CareerOS in the project context, is an autonomous AI jo
 
 ## Scope
 
-The backend is the active execution layer. `AgentService` orchestrates the workflow. The `DiscoveryModule` runs 4 discovery agents in parallel: `LinkedInAgent` scrapes LinkedIn directly using Playwright browser automation with anti-bot fingerprint masking, while `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` scrape Lever/Ashby/Workable, Greenhouse/YC, and Wellfound/Glassdoor via direct queries to the **TinyFish Search API** (`api.search.tinyfish.ai`). `IntelligenceService` scores candidate jobs using Groq (Llama 3.3) via LangChain.js, `MemoryService` tracks seen jobs via SHA-256 hashes, and `NotifierService` sends notifications via Telegram.[^6][^7][^8][^9][^10]
+The backend is the active execution layer. `AgentService` orchestrates the workflow. The `DiscoveryModule` runs 4 discovery agents in parallel: `LinkedInAgent` scrapes LinkedIn directly using Playwright browser automation with anti-bot fingerprint masking, while `AtsPortalsAgent`, `StartupBoardsAgent`, and `IndiaFocusedAgent` scrape Lever/Ashby/Workable/Greenhouse, YC/Wellfound, and Instahyre/Cutshort/Naukri via direct queries to the **TinyFish Search API** (`api.search.tinyfish.ai`). `IntelligenceService` scores candidate jobs using Groq (Llama 3.3) via LangChain.js, `MemoryService` tracks seen jobs via SHA-256 hashes, and `NotifierService` sends notifications via Telegram.[^6][^7][^8][^9][^10]
 
 The frontend exists as a separate Next.js app, but its current page, layout, and CSS are still default create-next-app content rather than a product surface.[^11][^12][^13]
 
@@ -18,9 +18,10 @@ The frontend exists as a separate Next.js app, but its current page, layout, and
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Backend agent loop | Implemented | `AgentService` runs parallel scrape -> dedupe -> score -> alert.[^6] |
-| Discovery Agents | Upgraded | LinkedIn uses stealth Playwright; Lever/Greenhouse/Wellfound use TinyFish Search API for real-time listings. |
+| Discovery Agents | Upgraded | LinkedIn uses stealth Playwright; Lever/Greenhouse/Wellfound/Instahyre/Naukri use TinyFish Search API for real-time listings. |
 | Target Threshold | Upgraded | The MVP target has been increased to 5 matching jobs per query session.[^6] |
-| Location Targeting | Implemented | Smart parser extracts local cities (e.g. Ahmedabad, Bangalore) from `profile.txt` preferences segment.[^6] |
+| Location Targeting & LLM Verification | Hardened | LLM Scorer extracts true physical location from snippet text to reject out-of-city/remote matches. Orchestrator applies true location prior to hashing.[^8] |
+| URL Path Targeting | Hardened | `IndiaFocusedAgent` limits results to singular job details (`/job/`, `/job-listings-`) to exclude dynamic directory pages. YC/Wellfound filter out catalog URLs.[^7] |
 | Model scoring | Implemented | `ChatGroq` uses `llama-3.3-70b-versatile` with zero temperature.[^8] |
 | Deduplication | Implemented | `seen_jobs.json` is a flat hash store keyed by title and company.[^9] |
 | Telegram alerts | Implemented | Alerting uses native `fetch` against the Telegram Bot API.[^10] |

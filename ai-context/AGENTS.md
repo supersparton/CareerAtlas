@@ -18,7 +18,7 @@
 
 ## 2. Project Location
 - **Workspace Root:** `c:\Users\POOJAN\OneDrive\Documents\CareerOS\`
-- **NestJS Backend:** `c:\Users\POOJAN\OneDrive\Documents\CareerOS\career-os-backend\`
+- **NestJS Backend:** `c:\Users\POOJAN\OneDrive\Documents\CareerOS\backend\`
 
 ---
 
@@ -36,9 +36,9 @@
 | `src/agent/agent.service.ts` | 🧠 **Main Orchestrator.** Replicates the Hermes Agent ReAct loop: scrape → deduplicate → score → alert. Extracts location dynamically. |
 | `src/discovery/discovery.module.ts` | 🕸️ **Discovery Module.** Wires and exports the parallel scraper agents. |
 | `src/discovery/linkedin.agent.ts` | 🕵️ **LinkedIn Agent.** Direct Playwright scraper with stealth fingerprint masking, human keyboard typing, and lazy-scrolling card parser. |
-| `src/discovery/career-pages.agent.ts` | 🔗 **Career Pages Agent.** Queries the TinyFish Search API for Lever/Ashby/Workable jobs. |
-| `src/discovery/yc-greenhouse.agent.ts` | 🥬 **Greenhouse/YC Agent.** Queries the TinyFish Search API for Greenhouse/YC job boards. |
-| `src/discovery/wellfound-glassdoor.agent.ts` | 💼 **Wellfound/Glassdoor Agent.** Queries the TinyFish Search API for startup & corporate openings. |
+| `src/discovery/ats-portals.agent.ts` | 🔗 **ATS Portals Agent.** Queries the TinyFish Search API for Lever/Ashby/Workable/Greenhouse jobs. |
+| `src/discovery/startup-boards.agent.ts` | 🥬 **Startup Boards Agent.** Queries the TinyFish Search API for YC India & Wellfound India job boards. |
+| `src/discovery/india-focused.agent.ts` | 💼 **India-Focused Agent.** Queries the TinyFish Search API for Instahyre, Cutshort, and Naukri listings. |
 | `src/intelligence/intelligence.service.ts` | 📊 **Job Scorer.** Uses `@langchain/groq` to score jobs against `profile.txt`. |
 | `src/notifier/notifier.service.ts` | 📲 **Telegram Alerter.** Sends matched job cards to Telegram using native Node `fetch`. |
 | `src/memory/memory.service.ts` | 🗃️ **Agent Memory.** Reads/writes SHA-256 hashes to `seen_jobs.json`. |
@@ -83,7 +83,7 @@
 
 ```cmd
 # 1. Navigate to the backend folder
-cd career-os-backend
+cd backend
 
 # 2. Run the NestJS application
 npm run start

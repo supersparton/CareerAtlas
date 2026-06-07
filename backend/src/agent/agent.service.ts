@@ -1,177 +1,181 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { DiscoveryService, ScrapedJob } from '../discovery/discovery.service';
-import { CareerPagesAgent } from '../discovery/career-pages.agent';
-import { YcGreenhouseAgent } from '../discovery/yc-greenhouse.agent';
-import { WellfoundGlassdoorAgent } from '../discovery/wellfound-glassdoor.agent';
+import { AtsPortalsAgent } from '../discovery/ats-portals.agent';
+import { StartupBoardsAgent } from '../discovery/startup-boards.agent';
+import { IndiaFocusedAgent } from '../discovery/india-focused.agent';
 import { LinkedInAgent } from '../discovery/linkedin.agent';
 import { IntelligenceService } from '../intelligence/intelligence.service';
 import { MemoryService } from '../memory/memory.service';
 import { NotifierService } from '../notifier/notifier.service';
-import * as fs from 'fs';
+import { Job } from '../discovery/discovery.service';
+import { ProfileParser, UserProfile } from './profile.parser';
 import * as path from 'path';
 
 @Injectable()
 export class AgentService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AgentService.name);
+  private userProfile: UserProfile;
 
   constructor(
-    private readonly discoveryService: DiscoveryService,
-    private readonly careerPagesAgent: CareerPagesAgent,
-    private readonly ycGreenhouseAgent: YcGreenhouseAgent,
-    private readonly wellfoundGlassdoorAgent: WellfoundGlassdoorAgent,
+    private readonly atsPortalsAgent: AtsPortalsAgent,
+    private readonly startupBoardsAgent: StartupBoardsAgent,
+    private readonly indiaFocusedAgent: IndiaFocusedAgent,
     private readonly linkedinAgent: LinkedInAgent,
     private readonly intelligenceService: IntelligenceService,
     private readonly memoryService: MemoryService,
     private readonly notifierService: NotifierService,
   ) {}
 
-  private loadProfileDetails() {
+  private loadProfile() {
     try {
       const profilePath = path.join(process.cwd(), '..', 'profile.txt');
-      if (fs.existsSync(profilePath)) {
-        const content = fs.readFileSync(profilePath, 'utf-8');
-        const targetRoleMatch = content.match(/\[TARGET ROLE\]\r?\n([^\n]+)/i);
-        const preferencesMatch = content.match(/\[PREFERENCES\]\r?\n([^\n]+)/i);
-        return {
-          targetRole: targetRoleMatch ? targetRoleMatch[1].trim() : 'Backend Software Engineer',
-          preferences: preferencesMatch ? preferencesMatch[1].trim() : 'Remote',
-        };
-      }
+      this.userProfile = ProfileParser.parse(profilePath);
+      this.logger.log(`[ORCHESTRATOR] Loaded profile. Target role: "${this.userProfile.targetRole}", Location: "${this.userProfile.targetLocation}"`);
     } catch (e) {
-      this.logger.error('Failed to load profile details in AgentService, using defaults', e);
+      this.logger.error('[ORCHESTRATOR] Failed to load profile.txt. Using defaults.', e);
+      this.userProfile = {
+        targetRole: 'Backend Software Engineer',
+        coreSkills: ['Node.js', 'TypeScript', 'FastAPI', 'Python'],
+        experienceLevel: 'Junior',
+        preferences: 'Remote',
+        targetLocation: 'Remote',
+        isRemoteOpen: true,
+      };
     }
-    return {
-      targetRole: 'Backend Software Engineer',
-      preferences: 'Remote',
-    };
   }
 
   async onApplicationBootstrap() {
-    this.logger.log('Agent Bootstrapped. Starting Ingestion & ReAct Loop...');
-    const { targetRole, preferences } = this.loadProfileDetails();
-    this.logger.log(`Parsed profile - Role: "${targetRole}", Preferences/Location: "${preferences}"`);
+    this.logger.log('[ORCHESTRATOR] Agent Bootstrapped. Starting Ingestion & ReAct Loop...');
+    this.loadProfile();
 
-    // Clean and optimize search queries
-    const primaryRole = targetRole.split(/ or | and |\/|,/i)[0]?.trim() || 'Backend Software Engineer';
+    const primaryRole = this.userProfile.targetRole.split(/ or | and |\/|,/i)[0]?.trim() || 'Backend Software Engineer';
     
-    // Smart location preference parsing
-    let locationSearch = 'Remote';
-    const segments = preferences.split(',').map(s => s.trim());
-    const excludeKeywords = /remote|hybrid|onsite|on-site|office|startup|developer|engineer|no\b|roles\b|job\b|work\b/i;
-    const locationSegment = segments.find(seg => !excludeKeywords.test(seg));
-
-    if (locationSegment) {
-      locationSearch = locationSegment;
-    } else if (/remote/i.test(preferences)) {
-      locationSearch = 'Remote';
-    } else {
-      locationSearch = 'US';
+    let locationSearch = `"${this.userProfile.targetLocation}"`;
+    if (this.userProfile.isRemoteOpen && this.userProfile.targetLocation.toLowerCase() !== 'remote') {
+      locationSearch = `("${this.userProfile.targetLocation}" OR "Remote")`;
+    } else if (this.userProfile.targetLocation.toLowerCase() === 'remote') {
+      locationSearch = '"Remote"';
     }
 
-    this.logger.log(`Optimized search parameters - Query Role: "${primaryRole}", Query Location: "${locationSearch}"`);
+    this.logger.log(`[ORCHESTRATOR] Optimized parameters: Role: "${primaryRole}", Location query: ${locationSearch}`);
     await this.runWorkflow(primaryRole, locationSearch);
   }
 
   async runWorkflow(searchTerm: string, locationPref: string) {
-    this.logger.log('--- STARTING JOB HUNT WORKFLOW ---');
+    this.logger.log('[ORCHESTRATOR] --- STARTING JOB HUNT WORKFLOW ---');
 
     let page = 1;
-    const threshold = 5; // Minimum number of high-match jobs we want for MVP
+    const threshold = 5;
     const maxCycles = 3;
     let currentCycle = 1;
-    const acceptedJobs: (ScrapedJob & { score: number; reasoning: string })[] = [];
+    const acceptedJobs: (Job & { score: number; reasoning: string })[] = [];
 
     while (acceptedJobs.length < threshold && currentCycle <= maxCycles) {
-      this.logger.log(`\n🔄 [CYCLE ${currentCycle} / ${maxCycles}] Starting parallel ingestion (Threshold: ${threshold}, Found: ${acceptedJobs.length})...`);
+      this.logger.log(`\n[ORCHESTRATOR] 🔄 [CYCLE ${currentCycle} / ${maxCycles}] Starting parallel ingestion (Threshold: ${threshold}, Found: ${acceptedJobs.length})...`);
 
       // 1. Run all four discovery agents in parallel
-      const [careerJobs, ycJobs, wellfoundJobs, linkedinJobs] = await Promise.all([
-        this.careerPagesAgent.findJobs(searchTerm, locationPref, page),
-        this.ycGreenhouseAgent.findJobs(searchTerm, locationPref, page),
-        this.wellfoundGlassdoorAgent.findJobs(searchTerm, locationPref, page),
+      const [atsJobs, startupJobs, indiaJobs, linkedinJobs] = await Promise.all([
+        this.atsPortalsAgent.findJobs(searchTerm, locationPref, page),
+        this.startupBoardsAgent.findJobs(searchTerm, locationPref, page),
+        this.indiaFocusedAgent.findJobs(searchTerm, locationPref, page),
         this.linkedinAgent.findJobs(searchTerm, locationPref, page),
       ]);
 
-      const allJobs = [...careerJobs, ...ycJobs, ...wellfoundJobs, ...linkedinJobs];
-      this.logger.log(`[CYCLE ${currentCycle}] Scraped ${allJobs.length} total jobs from all agents (Career: ${careerJobs.length}, YC/Greenhouse: ${ycJobs.length}, Wellfound/Glassdoor: ${wellfoundJobs.length}, LinkedIn: ${linkedinJobs.length})`);
+      const allJobs = [...atsJobs, ...startupJobs, ...indiaJobs, ...linkedinJobs];
+      this.logger.log(`[ORCHESTRATOR] Scraped ${allJobs.length} total jobs from all agents (ATS: ${atsJobs.length}, Startup Boards: ${startupJobs.length}, India Focused: ${indiaJobs.length}, LinkedIn: ${linkedinJobs.length})`);
 
-      // 2. Deduplicate based on title and company
-      const uniqueNewJobs: ScrapedJob[] = [];
+      // 2. Deduplicate within the current batch and memory cache
+      const uniqueNewJobs: Job[] = [];
       const seenInThisBatch = new Set<string>();
 
       for (const job of allJobs) {
-        const uniqueKey = `${job.title.toLowerCase().trim()}|${job.company.toLowerCase().trim()}`;
+        // Unique batch key based on company, title, location
+        const uniqueKey = `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}|${job.location.toLowerCase().trim()}`;
         
-        // Skip duplicate listings within the current batch
         if (seenInThisBatch.has(uniqueKey)) {
           continue;
         }
         seenInThisBatch.add(uniqueKey);
 
-        // 3. Skip if already processed in any previous cycle or run (Shared Persistent Memory)
-        if (this.memoryService.isJobSeen(job.title, job.company)) {
-          this.logger.log(`⏭️ Skipped duplicate: [${job.title} at ${job.company}] - Already in persistent memory.`);
+        // 3. Skip if already processed (LLM Cache Check)
+        if (this.memoryService.isJobProcessed(job.company, job.title, job.location, job.source)) {
           continue;
         }
 
         uniqueNewJobs.push(job);
       }
 
-      this.logger.log(`[CYCLE ${currentCycle}] Filtered out duplicates. ${uniqueNewJobs.length} new/unseen jobs remaining.`);
+      this.logger.log(`[ORCHESTRATOR] Filtered out duplicates. ${uniqueNewJobs.length} new/unseen jobs remaining for analysis.`);
 
       // 4. Filter and score remaining jobs
       for (const job of uniqueNewJobs) {
-        this.logger.log(`Evaluating: [${job.title} at ${job.company}]`);
-        const evaluation = await this.intelligenceService.scoreJob(job.title, job.company, job.descriptionSnippet);
+        const evaluation = await this.intelligenceService.scoreJob(job);
 
-        // Mark job as seen immediately so we never evaluate it again in future cycles/runs (Shared Memory)
-        this.memoryService.markJobAsSeen(job.title, job.company);
+        // Mark job as processed immediately to prevent repeating LLM queries (Cache)
+        this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
 
         if (evaluation.isFakeOrSpam) {
-          this.logger.warn(`🚩 Rejected: [${job.title} at ${job.company}] - Flagged as fake/spam.`);
+          this.logger.warn(`[ORCHESTRATOR] 🚩 Rejected: "${job.title}" at "${job.company}" - Flagged as fake/spam.`);
           continue;
         }
 
-        if (evaluation.matchScore < 60) {
-          this.logger.log(`🔻 Rejected: [${job.title} at ${job.company}] - Low match score (${evaluation.matchScore}/100)`);
+        if (evaluation.finalScore < 60) {
+          this.logger.log(`[ORCHESTRATOR] 🔻 Rejected: "${job.title}" at "${job.company}" - Low match score (${evaluation.finalScore}/100)`);
           continue;
+        }
+
+        // Override with cleaned/actual company and location from the LLM
+        if (evaluation.actualCompany) {
+          job.company = evaluation.actualCompany;
+        }
+        if (evaluation.actualLocation) {
+          job.location = evaluation.actualLocation;
         }
 
         // Success! High quality match
-        this.logger.log(`🎯 HIGH MATCH ACCEPTED: [${job.title} at ${job.company}] (Score: ${evaluation.matchScore}/100)`);
-        this.logger.log(`Reasoning: ${evaluation.reasoning}`);
+        if (this.memoryService.isJobMatched(job.company, job.title, job.location, job.source)) {
+          this.logger.log(`[ORCHESTRATOR] 🔔 Skipped notification: "${job.title}" at "${job.company}" already notified in a previous run.`);
+          continue;
+        }
+
+        this.logger.log(`[ORCHESTRATOR] 🎯 HIGH MATCH ACCEPTED: "${job.title}" at "${job.company}" (Score: ${evaluation.finalScore}/100)`);
+        this.logger.log(`[ORCHESTRATOR] Reasoning: ${evaluation.reasoning}`);
         
         acceptedJobs.push({
           ...job,
-          score: evaluation.matchScore,
+          score: evaluation.finalScore,
           reasoning: evaluation.reasoning,
         });
 
-        // Send Telegram alert
+        // Mark as matched in the persistent match storage (seen_jobs.json)
+        this.memoryService.markJobAsMatched(job.company, job.title, job.location, job.source);
+
+        // Send Telegram alert with detailed sub-scores
         await this.notifierService.sendJobAlert(
-          job.title,
-          job.company,
-          evaluation.matchScore,
-          evaluation.reasoning,
-          job.url
+          job,
+          evaluation.finalScore,
+          {
+            skills: evaluation.skillsScore,
+            experience: evaluation.experienceScore,
+            location: evaluation.locationScore,
+          },
+          evaluation.reasoning
         );
       }
 
-      this.logger.log(`[CYCLE ${currentCycle}] Ended with ${acceptedJobs.length} accumulated matches.`);
+      this.logger.log(`[ORCHESTRATOR] [CYCLE ${currentCycle}] Ended with ${acceptedJobs.length} accumulated matches.`);
 
       // 5. ReAct Loop condition check
       if (acceptedJobs.length >= threshold) {
-        this.logger.log(`✅ Threshold reached! Found ${acceptedJobs.length} jobs (Minimum required: ${threshold}). Terminating loop.`);
+        this.logger.log(`[ORCHESTRATOR] ✅ Threshold reached! Found ${acceptedJobs.length} jobs (Minimum required: ${threshold}). Terminating loop.`);
         break;
       } else {
-        this.logger.warn(`⚠️ Under Threshold! Found only ${acceptedJobs.length} jobs. Max limit is ${threshold}. Incrementing page and looping...`);
+        this.logger.warn(`[ORCHESTRATOR] ⚠️ Under Threshold! Found only ${acceptedJobs.length} jobs. Max limit is ${threshold}. Incrementing page and looping...`);
         page++;
         currentCycle++;
       }
     }
 
-    this.logger.log(`\n--- WORKFLOW COMPLETE ---`);
-    this.logger.log(`Total high-match jobs found and notified: ${acceptedJobs.length}`);
+    this.logger.log('\n[ORCHESTRATOR] --- WORKFLOW COMPLETE ---');
+    this.logger.log(`[ORCHESTRATOR] Total high-match jobs found and notified: ${acceptedJobs.length}`);
   }
 }
-

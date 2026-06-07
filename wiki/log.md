@@ -5,6 +5,13 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-06-07] hardening | LLM True Location Extraction & URL Path Targeting
+- Renamed scraping agents to `AtsPortalsAgent`, `StartupBoardsAgent`, and `IndiaFocusedAgent` for architectural clarity.
+- Implemented LLM-driven metadata extraction to identify true job locations from raw title and description snippets, allowing the scorer to reject irrelevant geographical matches (e.g. Noida/remote jobs targeting Ahmedabad).
+- Refined site queries for Instahyre, Cutshort, and Naukri to strictly target singular job postings (`/job/`, `/job-listings-`), completely filtering out dynamic listing index categories.
+- Added a catalog URL filter (`isCatalogUrl`) to exclude YC and Wellfound category listing pages.
+- Restored `seen_jobs.json` as the default tracker for matched jobs, while designating `processed_jobs.json` strictly as the LLM query evaluation cache.
+
 ## [2026-06-07] upgrade | Integrated TinyFish Search & Playwright LinkedIn Agent
 - Created `LinkedInAgent` (Playwright) with anti-bot fingerprint masking, human-like typing simulation, and login flow.[^3]
 - Refactored `CareerPagesAgent`, `YcGreenhouseAgent`, and `WellfoundGlassdoorAgent` to fetch real-time data from the **TinyFish Search API** instead of DuckDuckGo HTML scraping.[^3]

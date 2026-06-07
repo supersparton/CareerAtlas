@@ -44,9 +44,9 @@ backend/src/
   │
   ├── discovery/discovery.module.ts
   │     ├── linkedin.agent.ts               → Direct Playwright Stealth Scraper
-  │     ├── career-pages.agent.ts            → TinyFish Search API (Lever/Ashby)
-  │     ├── yc-greenhouse.agent.ts           → TinyFish Search API (Greenhouse/YC)
-  │     └── wellfound-glassdoor.agent.ts     → TinyFish Search API (Wellfound/Glassdoor)
+  │     ├── ats-portals.agent.ts            → TinyFish Search API (Lever/Ashby/Workable/Greenhouse)
+  │     ├── startup-boards.agent.ts         → TinyFish Search API (YC/Wellfound)
+  │     └── india-focused.agent.ts          → TinyFish Search API (Instahyre/Cutshort/Naukri)
   │
   ├── intelligence/intelligence.module.ts
   │     ├── loadProfile()         → ../profile.txt (read & parse target location)

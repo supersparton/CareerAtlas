@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Job } from '../discovery/discovery.service';
 
 @Injectable()
 export class NotifierService {
@@ -6,18 +7,27 @@ export class NotifierService {
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
 
-  async sendJobAlert(title: string, company: string, score: number, reasoning: string, link: string) {
+  async sendJobAlert(
+    job: Job,
+    finalScore: number,
+    subScores: { skills: number; experience: number; location: number },
+    reasoning: string
+  ) {
     if (!this.botToken || !this.chatId) {
-      this.logger.warn('Telegram credentials not found in .env. Skipping alert.');
+      this.logger.warn('[NOTIFIER] Telegram credentials not found in .env. Skipping alert.');
       return;
     }
 
-    const message = `🚨 *New High-Match Job!* 🚨\n\n` +
-      `💼 *Role:* ${title}\n` +
-      `🏢 *Company:* ${company}\n` +
-      `🎯 *Match Score:* ${score}/100\n\n` +
+    const message = `🚨 *New High-Match Job Found!* 🚨\n\n` +
+      `💼 *Role:* ${job.title}\n` +
+      `🏢 *Company:* ${job.company}\n` +
+      `📍 *Location:* ${job.location}\n` +
+      `🎯 *Match Score:* *${finalScore}/100*\n` +
+      `  • _Skills:_ ${subScores.skills}/100\n` +
+      `  • _Experience:_ ${subScores.experience}/100\n` +
+      `  • _Location:_ ${subScores.location}/100\n\n` +
       `🧠 *AI Reasoning:* ${reasoning}\n\n` +
-      `🔗 [Apply Here](${link})`;
+      `🔗 [Apply Here](${job.applyUrl})`;
 
     const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
 
@@ -38,9 +48,9 @@ export class NotifierService {
         throw new Error(`Telegram API responded with status ${response.status}`);
       }
 
-      this.logger.log(`Telegram alert sent successfully for ${company}!`);
+      this.logger.log(`[NOTIFIER] Telegram alert sent successfully for ${job.company}!`);
     } catch (e) {
-      this.logger.error(`Failed to send Telegram alert: ${e.message}`);
+      this.logger.error(`[NOTIFIER] Failed to send Telegram alert: ${e.message}`);
     }
   }
 }

@@ -63,7 +63,7 @@
 ---
 
 ### Phase 4: Node.js/NestJS Agent Integration ✅ COMPLETE
-- [x] Migrated from Python to a NestJS/TypeScript architecture (`career-os-backend`).
+- [x] Migrated from Python to a NestJS/TypeScript architecture (`backend`).
 - [x] Replicated Hermes Agent ReAct loop using `AgentModule` and LangChain.js.
 - [x] Implemented Playwright in `DiscoveryModule` for robust LinkedIn scraping.
 - [x] Created dedicated Playwright `LinkedInAgent` with browser fingerprint masking and human emulation.
@@ -71,11 +71,31 @@
 - [x] Configured MVP target threshold to return 5 high-match jobs per query.
 - [x] Integrated `IntelligenceModule` with Groq LLM (Llama 3.3) for profile matching.
 - [x] Swapped `axios` for native `fetch` in `NotifierModule` for better security.
+- [x] Refactored LLM matching to use a multi-criteria score (Skills, Experience, Location) calculated via JSON structured output and aggregated with weighted code logic.
+- [x] Created `ProfileParser` to isolate profile config concerns and support multi-criteria parameters.
+- [x] Replaced `ScrapedJob` with a unified `Job` contract and introduced SHA-256 compound hashing to prevent false-positive deduplication.
+- [x] Separated LLM caching from accepted matches using `seen_jobs.json` (reverted from `processed_jobs.json` for backwards compatibility with external scripts).
+- [x] Added structured prefix logging (`[SCRAPER]`, `[SCORER]`, `[NOTIFIER]`, etc.) across all components.
+- [x] Implemented dynamic 30-day freshness filtering (`after:YYYY-MM-DD`) on search engine queries to ensure all scraped links are active and not expired.
+- [x] Resolved location-restricting search bugs by enabling compound queries (e.g. `("Ahmedabad" OR "Remote")`) when remote preference is active.
+- [x] Completely eliminated mock/dummy fallback data from all discovery agents to prevent misleading or duplicate results.
+- [x] Reorganized parallel scraping agents into three highly optimized search pipelines:
+  * **India-Focused Pipeline**: Instahyre, Cutshort, Naukri.
+  * **Startup Boards Pipeline**: YC India and Wellfound India.
+  * **ATS Portals Pipeline**: Greenhouse, Lever, Ashby, Workable.
+  * **LinkedIn Scraper**: Playwright with guest pagination fixes.
+- [x] Implemented LLM-driven metadata extraction to identify true job locations and companies from titles and snippets, enabling the Scorer to reject false-positive location matches.
+- [x] Refined `IndiaFocusedAgent` search queries to target only individual postings (`/job/`, `/job-listings-`) instead of aggregate directory pages.
+- [x] Implemented YC & Wellfound catalog URL exclusion filters (`isCatalogUrl`) to keep search data clean from generic listing indexes.
 
 **Key Learnings from Phase 4:**
 - DuckDuckGo / general search engine indexed pages return stale and expired links (e.g., job postings that have already closed). Querying the TinyFish Search API directly provides much fresher, real-time results.
 - Injecting custom browser anonymization (overriding `navigator.webdriver`, spoofing languages, and blocking WebGL/Canvas fingerprinting) is essential to bypass bot detection when crawling LinkedIn.
 - Emmitting keyboard presses character-by-character with random delays simulates realistic human typing, avoiding instant blocks on login screens.
+- Splitting matches into skills, experience, and location scores gives the system granular explainability and keeps LLM token costs identical by retrieving them in a single structured JSON response.
+- Compound deduplication hashing (using title, company, location, and source) is far more robust than simple title+company hashes, preventing geographic and source collisions.
+- Appending `after:YYYY-MM-DD` directly to Google Search-based API calls filters out old crawled indexes, solving the expired link problem without requiring extra HTTP status checks.
+- When search results are empty, returning static dummy jobs unconditionally masks search errors. Removing dummy fallback data completely allows proper, clean live pagination.
 
 ---
 

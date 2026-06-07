@@ -8,5 +8,5 @@ Python, Django, FastAPI, SQL, Git, and LLMs , MERN stack
 Junior (0-2 years experience)
 
 [PREFERENCES]
-Ahmedabad , onsite or Remote or Hybrid , no cold-sales or marketing roles
+Ahmedabad , onsite or Hybrid , no cold-sales or marketing roles
 
