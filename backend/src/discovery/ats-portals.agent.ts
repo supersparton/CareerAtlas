@@ -7,9 +7,9 @@ export class AtsPortalsAgent {
   private readonly apiKey = process.env.TINYFISH_API_KEY;
 
   private getDateFilter(): string {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateStr = thirtyDaysAgo.toISOString().split('T')[0];
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const dateStr = sevenDaysAgo.toISOString().split('T')[0];
     return `after:${dateStr}`;
   }
 

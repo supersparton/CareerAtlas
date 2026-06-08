@@ -1,40 +1,41 @@
 ---
 title: CareerAtlas Frontend App
-description: Documents the current Next.js web app scaffold and the frontend source files that exist in the CareerAtlas workspace.
-date: 2026-05-30
-tags: [careeratlas, frontend, nextjs, ui, scaffold]
+description: Documents the interactive Next.js web application dashboard for uploading resumes, editing titles, and launching searches.
+date: 2026-06-08
+tags: [careeratlas, frontend, nextjs, ui, dashboard]
 ---
 
-The CareerAtlas frontend is currently a starter Next.js app rather than a finished product UI. Its source tree is limited to the default app shell files, so the wiki should treat this area as scaffolding until a real CareerAtlas interface is introduced.[^1][^2][^3]
+The CareerAtlas frontend is an interactive Next.js dashboard built using Tailwind CSS v4. It allows users to upload a PDF resume, trigger LLM-driven parsing and title recommendations, edit or add job search terms manually, and start the parallel discovery agents loop.
 
 ## Source Map
 
 | File | What It Does | Current State |
 | --- | --- | --- |
-| `frontend/app/page.tsx` | Root page component. | Default create-next-app landing page with starter links and copy.[^1] |
-| `frontend/app/layout.tsx` | Root layout and metadata. | Uses Geist fonts and starter metadata titled `Create Next App`.[^2] |
-| `frontend/app/globals.css` | Global styles and theme tokens. | Minimal Tailwind v4 starter variables with a basic system font fallback.[^3] |
-| `frontend/public/favicon.ico` | Browser tab icon. | Present in the app directory tree but not otherwise documented in the source pages. |
+| `frontend/app/page.tsx` | Main interactive control dashboard. | Custom React component with PDF file upload, title editing tags, location input, and run status console.[^1] |
+| `frontend/app/layout.tsx` | Root layout and metadata. | Configures customized title tags ("CareerOS - Autonomous Job Ingestion & Search").[^2] |
+| `frontend/app/globals.css` | Global styles and theme tokens. | Includes Tailwind v4 base styles.[^3] |
+| `frontend/next.config.ts` | Next.js configuration. | Defines API rewrite proxy rules routing `/api/:path*` traffic to the NestJS backend at `http://localhost:3000` to prevent CORS issues. |
 
 ## What The Web App Currently Says
 
-- The page content still tells the developer to edit `page.tsx` to get started.[^1]
-- The layout metadata still identifies the app as a generic starter project rather than CareerAtlas.[^2]
-- The global stylesheet is still the standard starter baseline, so there is no branded design system yet.[^3]
+- The page content provides a three-step configuration wizard (Upload Resume -> Setup Search Titles -> Launch Agents) with a live activity log.[^1]
+- The layout metadata is custom-branded to CareerOS instead of the default starter metadata.[^2]
 
 ## Relationship To The Backend
 
 ```mermaid
 graph LR
-    A[Frontend App Scaffold] -. separate workspace .-> B[Backend Agent Loop]
-    B --> C[Scrape Jobs]
-    B --> D[Score Jobs]
-    B --> E[Alert User]
+    A[Frontend Dashboard UI] -- POST /api/profile/upload-resume --> B[Backend Parser]
+    A -- GET /api/profile/suggest-titles --> C[LLM Title Recommender]
+    A -- POST /api/agent/run --> D[Backend Agent Orchestrator]
+    D --> E[Scrape Jobs]
+    D --> F[Score Jobs]
+    D --> G[Alert Telegram]
 ```
 
 ## Practical Implication
 
-The frontend wiki should be updated only when the app stops being a starter shell, when new route files are added, or when the project gains a real user-facing dashboard or settings flow.
+The frontend dashboard serves as the user-facing control center of the MVP, allowing seamless pipeline orchestration without needing manual edits to local text configuration files.
 
 [^1]: frontend/app/page.tsx
 [^2]: frontend/app/layout.tsx

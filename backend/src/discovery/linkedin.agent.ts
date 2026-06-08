@@ -50,12 +50,42 @@ export class LinkedInAgent {
         this.logger.log('[LinkedIn Agent] No credentials found. Scraping in Guest mode.');
       }
 
+      // Clean locationPref for LinkedIn: LinkedIn doesn't support Boolean OR queries (e.g. ("Bangalore" OR "Remote")) in its location field.
+      let cleanLocation = locationPref;
+      if (locationPref.includes(' OR ')) {
+        const matches = locationPref.match(/"([^"]+)"/g);
+        if (matches && matches.length > 0) {
+          const nonRemote = matches.map(m => m.replace(/"/g, '')).find(m => m.toLowerCase() !== 'remote');
+          cleanLocation = nonRemote || matches[0].replace(/"/g, '');
+        } else {
+          cleanLocation = locationPref.split(' OR ')[0].replace(/[()"]/g, '').trim();
+        }
+      } else {
+        cleanLocation = locationPref.replace(/[()"]/g, '').trim();
+      }
+
+      // Determine the regional subdomain to bypass the public authwall redirection (e.g., in.linkedin.com)
+      let subdomain = 'www';
+      const locLower = cleanLocation.toLowerCase();
+      if (
+        locLower.includes('india') ||
+        locLower.includes('bangalore') ||
+        locLower.includes('bengaluru') ||
+        locLower.includes('ahmedabad') ||
+        locLower.includes('noida') ||
+        locLower.includes('delhi') ||
+        locLower.includes('mumbai') ||
+        locLower.includes('pune')
+      ) {
+        subdomain = 'in';
+      }
+
       // 4. Construct Search URL
       let searchUrl = '';
       if (isLoggedIn) {
-        searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(locationPref)}&start=${(pageNum - 1) * 25}`;
+        searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(cleanLocation)}&start=${(pageNum - 1) * 25}`;
       } else {
-        searchUrl = `https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(locationPref)}&start=${(pageNum - 1) * 25}&position=1&pageNum=${pageNum - 1}`;
+        searchUrl = `https://${subdomain}.linkedin.com/jobs/search?keywords=${encodeURIComponent(searchTerm)}&location=${encodeURIComponent(cleanLocation)}&start=${(pageNum - 1) * 25}&position=1&pageNum=${pageNum - 1}`;
       }
 
       this.logger.log(`[LinkedIn Agent] Navigating to search URL: ${searchUrl}`);
@@ -74,7 +104,7 @@ export class LinkedInAgent {
       // 6. Extract card elements
       const cards = isLoggedIn 
         ? await page.$$('li[data-occludable-job-id], .jobs-search-results__list-item') 
-        : await page.$$('.jobs-search__results-list li');
+        : await page.$$('.jobs-search__results-list li, .base-search-card, .base-card');
 
       this.logger.log(`[LinkedIn Agent] Found ${cards.length} raw job elements.`);
 
@@ -83,7 +113,7 @@ export class LinkedInAgent {
         try {
           let title = '';
           let company = '';
-          let loc = locationPref;
+          let loc = cleanLocation;
           let url = '';
           let description = '';
 

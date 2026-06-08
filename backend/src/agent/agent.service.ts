@@ -7,7 +7,7 @@ import { IntelligenceService } from '../intelligence/intelligence.service';
 import { MemoryService } from '../memory/memory.service';
 import { NotifierService } from '../notifier/notifier.service';
 import { Job } from '../discovery/discovery.service';
-import { ProfileParser, UserProfile } from './profile.parser';
+import { ProfileService, ParsedProfile as UserProfile } from './profile.service';
 import * as path from 'path';
 
 @Injectable()
@@ -23,51 +23,44 @@ export class AgentService implements OnApplicationBootstrap {
     private readonly intelligenceService: IntelligenceService,
     private readonly memoryService: MemoryService,
     private readonly notifierService: NotifierService,
+    private readonly profileService: ProfileService,
   ) {}
 
   private loadProfile() {
     try {
-      const profilePath = path.join(process.cwd(), '..', 'profile.txt');
-      this.userProfile = ProfileParser.parse(profilePath);
+      this.userProfile = this.profileService.getProfile();
       this.logger.log(`[ORCHESTRATOR] Loaded profile. Target role: "${this.userProfile.targetRole}", Location: "${this.userProfile.targetLocation}"`);
     } catch (e) {
-      this.logger.error('[ORCHESTRATOR] Failed to load profile.txt. Using defaults.', e);
+      this.logger.error('[ORCHESTRATOR] Failed to load profile. Using defaults.', e);
       this.userProfile = {
+        fullName: 'Default User',
+        email: '',
+        phone: '',
         targetRole: 'Backend Software Engineer',
         coreSkills: ['Node.js', 'TypeScript', 'FastAPI', 'Python'],
         experienceLevel: 'Junior',
         preferences: 'Remote',
         targetLocation: 'Remote',
         isRemoteOpen: true,
+        experience: [],
+        projects: [],
+        education: [],
       };
     }
   }
 
   async onApplicationBootstrap() {
-    this.logger.log('[ORCHESTRATOR] Agent Bootstrapped. Starting Ingestion & ReAct Loop...');
+    this.logger.log('[ORCHESTRATOR] Agent Bootstrapped in standby mode. Ready to receive upload-resume and agent-run requests.');
     this.loadProfile();
-
-    const primaryRole = this.userProfile.targetRole.split(/ or | and |\/|,/i)[0]?.trim() || 'Backend Software Engineer';
-    
-    let locationSearch = `"${this.userProfile.targetLocation}"`;
-    if (this.userProfile.isRemoteOpen && this.userProfile.targetLocation.toLowerCase() !== 'remote') {
-      locationSearch = `("${this.userProfile.targetLocation}" OR "Remote")`;
-    } else if (this.userProfile.targetLocation.toLowerCase() === 'remote') {
-      locationSearch = '"Remote"';
-    }
-
-    this.logger.log(`[ORCHESTRATOR] Optimized parameters: Role: "${primaryRole}", Location query: ${locationSearch}`);
-    await this.runWorkflow(primaryRole, locationSearch);
   }
 
-  async runWorkflow(searchTerm: string, locationPref: string) {
-    this.logger.log('[ORCHESTRATOR] --- STARTING JOB HUNT WORKFLOW ---');
+  async runWorkflow(searchTerm: string, locationPref: string, threshold = 5): Promise<(Job & { score: number; reasoning: string; evaluation: any })[]> {
+    this.logger.log(`[ORCHESTRATOR] --- STARTING JOB HUNT WORKFLOW FOR "${searchTerm}" (Threshold: ${threshold}) ---`);
 
     let page = 1;
-    const threshold = 5;
     const maxCycles = 3;
     let currentCycle = 1;
-    const acceptedJobs: (Job & { score: number; reasoning: string })[] = [];
+    const acceptedJobs: (Job & { score: number; reasoning: string; evaluation: any })[] = [];
 
     while (acceptedJobs.length < threshold && currentCycle <= maxCycles) {
       this.logger.log(`\n[ORCHESTRATOR] 🔄 [CYCLE ${currentCycle} / ${maxCycles}] Starting parallel ingestion (Threshold: ${threshold}, Found: ${acceptedJobs.length})...`);
@@ -106,9 +99,24 @@ export class AgentService implements OnApplicationBootstrap {
 
       this.logger.log(`[ORCHESTRATOR] Filtered out duplicates. ${uniqueNewJobs.length} new/unseen jobs remaining for analysis.`);
 
-      // 4. Filter and score remaining jobs
-      for (const job of uniqueNewJobs) {
-        const evaluation = await this.intelligenceService.scoreJob(job);
+      // 4. Filter and score remaining jobs in parallel
+      const scoringPromises = uniqueNewJobs.map(async (job) => {
+        try {
+          const evaluation = await this.intelligenceService.scoreJob(job, this.userProfile, locationPref);
+          return { job, evaluation, success: true };
+        } catch (err) {
+          this.logger.error(`[ORCHESTRATOR] Error evaluating job "${job.title}" at "${job.company}": ${err.message}`);
+          return { job, evaluation: null, success: false };
+        }
+      });
+
+      const evaluatedResults = await Promise.all(scoringPromises);
+
+      for (const res of evaluatedResults) {
+        if (!res.success || !res.evaluation) {
+          continue;
+        }
+        const { job, evaluation } = res;
 
         // Mark job as processed immediately to prevent repeating LLM queries (Cache)
         this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
@@ -133,7 +141,7 @@ export class AgentService implements OnApplicationBootstrap {
 
         // Success! High quality match
         if (this.memoryService.isJobMatched(job.company, job.title, job.location, job.source)) {
-          this.logger.log(`[ORCHESTRATOR] 🔔 Skipped notification: "${job.title}" at "${job.company}" already notified in a previous run.`);
+          this.logger.log(`[ORCHESTRATOR] 🔔 Skipped: "${job.title}" at "${job.company}" already matched in a previous run.`);
           continue;
         }
 
@@ -144,22 +152,8 @@ export class AgentService implements OnApplicationBootstrap {
           ...job,
           score: evaluation.finalScore,
           reasoning: evaluation.reasoning,
+          evaluation,
         });
-
-        // Mark as matched in the persistent match storage (seen_jobs.json)
-        this.memoryService.markJobAsMatched(job.company, job.title, job.location, job.source);
-
-        // Send Telegram alert with detailed sub-scores
-        await this.notifierService.sendJobAlert(
-          job,
-          evaluation.finalScore,
-          {
-            skills: evaluation.skillsScore,
-            experience: evaluation.experienceScore,
-            location: evaluation.locationScore,
-          },
-          evaluation.reasoning
-        );
       }
 
       this.logger.log(`[ORCHESTRATOR] [CYCLE ${currentCycle}] Ended with ${acceptedJobs.length} accumulated matches.`);
@@ -176,6 +170,58 @@ export class AgentService implements OnApplicationBootstrap {
     }
 
     this.logger.log('\n[ORCHESTRATOR] --- WORKFLOW COMPLETE ---');
-    this.logger.log(`[ORCHESTRATOR] Total high-match jobs found and notified: ${acceptedJobs.length}`);
+    this.logger.log(`[ORCHESTRATOR] Total high-match jobs found for "${searchTerm}": ${acceptedJobs.length}`);
+    return acceptedJobs;
+  }
+
+  async runWorkflowSuite(searchTerms: string[], locationPref: string) {
+    this.logger.log('[ORCHESTRATOR] Starting background job search suite...');
+    try {
+      const targetThreshold = 5;
+      const allMatchedJobs: (Job & { score: number; reasoning: string; evaluation: any })[] = [];
+
+      for (const term of searchTerms) {
+        if (allMatchedJobs.length >= targetThreshold) {
+          this.logger.log(`[ORCHESTRATOR] Overall target threshold of ${targetThreshold} jobs already reached. Skipping remaining search term: "${term}"`);
+          break;
+        }
+        
+        this.logger.log(`[ORCHESTRATOR] Running search cycle for term: "${term}" (Target remaining: ${targetThreshold - allMatchedJobs.length})`);
+        const matches = await this.runWorkflow(term, locationPref, targetThreshold - allMatchedJobs.length);
+        allMatchedJobs.push(...matches);
+      }
+
+      this.logger.log(`[ORCHESTRATOR] Finished all search cycles. Total matches found: ${allMatchedJobs.length}`);
+
+      // Sort matches by score descending
+      const sortedJobs = allMatchedJobs.sort((a, b) => b.score - a.score);
+
+      // Take top 5
+      const topJobs = sortedJobs.slice(0, targetThreshold);
+      this.logger.log(`[ORCHESTRATOR] Selecting top ${topJobs.length} highest-rated jobs for notifications...`);
+
+      for (const matched of topJobs) {
+        const { score, evaluation, reasoning, ...job } = matched;
+
+        // Mark as matched in the persistent match storage (seen_jobs.json)
+        this.memoryService.markJobAsMatched(job.company, job.title, job.location, job.source);
+
+        // Send Telegram alert
+        await this.notifierService.sendJobAlert(
+          job,
+          score,
+          {
+            skills: evaluation.skillsScore,
+            experience: evaluation.experienceScore,
+            location: evaluation.locationScore,
+          },
+          reasoning
+        );
+      }
+
+      this.logger.log(`[ORCHESTRATOR] Notifications successfully sent for the top ${topJobs.length} matches.`);
+    } catch (err) {
+      this.logger.error(`[ORCHESTRATOR] Suite run failed: ${err.message}`, err.stack);
+    }
   }
 }

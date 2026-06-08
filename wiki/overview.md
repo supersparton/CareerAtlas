@@ -34,7 +34,8 @@ The frontend exists as a separate Next.js app, but its current page, layout, and
 - The project is organized around one autonomous workflow rather than a manual job board browsing app.[^1][^2]
 - DuckDuckGo / general search engine indexed page crawls return expired/stale job links. Transitioning to direct API calls via TinyFish Search API yields live, active jobs and speeds up searches by 10x.
 - Anti-fingerprint masking (blocking WebGL/Canvas, overriding `navigator.webdriver`) is required to prevent LinkedIn checkpoints.
-- `profile.txt` remains the user-editable target input containing location preferences and skills.[^8]
+- `profile.json` (parsed from uploaded resume PDF) represents the target candidate profile containing skills, target role, education, and experience level.
+- Shorter date query windows (e.g. 7 days) and strict LLM instructions for experience level comparison are critical to filter out stale search engine index pages and out-of-level roles.
 
 ## Runtime Overview
 

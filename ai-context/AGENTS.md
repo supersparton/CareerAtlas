@@ -56,6 +56,9 @@
 | `TINYFISH_API_KEY` | TinyFish Search API | [agent.tinyfish.ai/api-keys](https://agent.tinyfish.ai/api-keys) |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot | Create bot via `@BotFather` in Telegram |
 | `TELEGRAM_CHAT_ID` | Telegram Chat Target | Get from `getUpdates` after sending bot a message |
+| `USE_OLLAMA` | Local LLM Bypass | Set to `true` to force local model execution |
+| `OLLAMA_BASE_URL` | Local LLM Url | Default is `http://localhost:11434` |
+| `OLLAMA_MODEL` | Local LLM Model | Default is `llama3` (or run `llama3.2` locally) |
 
 ---
 
@@ -64,6 +67,8 @@
 | Component | Model | Provider | Why |
 | :--- | :--- | :--- | :--- |
 | Job Scorer | `llama-3.3-70b-versatile` | Groq | Accurate semantic reasoning, fast, supported by LangChain. |
+| Primary Scorer | `gemini-2.5-flash` | Gemini | Zero library footprint REST endpoint, highly accurate. |
+| Local Scorer | `llama3.2` or `llama3` | Ollama (Local) | Bypasses rate-limiting constraints for local development. |
 
 > ⚠️ **IMPORTANT:** Never use `modelName` in the ChatGroq constructor. LangChain specifically requires the property to be `model`.
 

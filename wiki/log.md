@@ -5,6 +5,14 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-06-09] release | Consolidated Backend Optimization & Multi-LLM Fallback
+- Configured tri-level LLM fallback chain (Ollama → Gemini → Groq) to bypass online rate-limiting constraints during local development.
+- Refactored orchestrator loop to track global matches across search terms, terminating the search cycles immediately once the target threshold of 5 jobs is met.
+- Implemented a post-search rating filter: all matches are sorted by LLM score, and only the top 5 highest-rated jobs are matched and notified via Telegram.
+- Reduced date query filter from 30 days to 7 days across scrapers to minimize stale search index matches.
+- Added strict experience scoring instructions to prevent the LLM from overscoring junior profiles on senior/mid-senior roles.
+- Restored LinkedIn Guest Mode scraping (cleaned query locations, regional subdomain routing, and robust selectors) and fixed location scoring target mismatches.
+
 ## [2026-06-07] hardening | LLM True Location Extraction & URL Path Targeting
 - Renamed scraping agents to `AtsPortalsAgent`, `StartupBoardsAgent`, and `IndiaFocusedAgent` for architectural clarity.
 - Implemented LLM-driven metadata extraction to identify true job locations from raw title and description snippets, allowing the scorer to reject irrelevant geographical matches (e.g. Noida/remote jobs targeting Ahmedabad).

@@ -11,32 +11,38 @@ CareerAtlas is built around a linear agent loop in the NestJS backend: discover 
 
 | Step | Service | Responsibility | Main Output |
 | --- | --- | --- | --- |
-| 1 | Discovery Agents | Parallel scrapers: Playwright (`LinkedInAgent`) and TinyFish Search API (`AtsPortalsAgent`, `StartupBoardsAgent`, `IndiaFocusedAgent`). | Real-time candidate jobs |
-| 2 | MemoryService | Hashes `company + title + location + source` and checks `seen_jobs.json` to prevent duplicates. | Seen / unseen decision |
-| 3 | IntelligenceService | Loads `profile.txt`, extracts the true job location and company, and scores the job with Groq + LangChain. | `JobScore` & extracted metadata |
-| 4 | NotifierService | Sends a Telegram Markdown alert when the match score is high enough. | Telegram notification |
-| 5 | AgentService | Coordinates the workflow, applies LLM location refinements, and loops until the target threshold is met. | End-to-end run |
+| 1 | ProfileService | Parses uploaded resume PDF to JSON (`profile.json`) using LLM, and suggests job title search terms. | `profile.json` & Suggested Titles |
+| 2 | AgentController | Receives user-confirmed/edited search terms and triggers the scraper run in the background. | Job search query trigger |
+| 3 | Discovery Agents | Parallel scrapers: Playwright (`LinkedInAgent`) and TinyFish Search API (`AtsPortalsAgent`, `StartupBoardsAgent`, `IndiaFocusedAgent`). | Real-time candidate jobs |
+| 4 | MemoryService | Hashes `company + title + location + source` and checks `seen_jobs.json` to prevent duplicates. | Seen / unseen decision |
+| 5 | IntelligenceService | Evaluates candidate jobs against the parsed JSON profile using Groq + LangChain. | `JobScore` & extracted metadata |
+| 6 | NotifierService | Sends a Telegram Markdown alert when the match score is high enough. | Telegram notification |
+| 7 | AgentService | Coordinates the background loop, applies LLM location/company refinements, and gathers 5 matches. | Completed run |
 
 ## Backend Module Map
 
 ```mermaid
 graph TD
     A[AppModule] --> B[AgentModule]
-    B --> C[AgentService]
-    B --> D[DiscoveryModule]
-    D --> E[LinkedInAgent - Playwright]
-    D --> F[AtsPortalsAgent - TinyFish]
-    D --> G[StartupBoardsAgent - TinyFish]
-    D --> H[IndiaFocusedAgent - TinyFish]
+    B --> C[AgentController]
+    B --> D[ProfileService]
+    B --> E[AgentService]
+    B --> F[DiscoveryModule]
+    F --> G[LinkedInAgent - Playwright]
+    F --> H[AtsPortalsAgent - TinyFish]
+    F --> I[StartupBoardsAgent - TinyFish]
+    F --> J[IndiaFocusedAgent - TinyFish]
 ```
 
 ## Important Implementation Details
 
 - `AppModule` loads `.env` through `ConfigModule` and boots `AgentModule`.[^6]
-- `AgentService` starts automatically on application bootstrap, dynamically extracts the user's city/country from `profile.txt` (e.g. Bangalore, Ahmedabad), and loops until 5 high-match jobs are found.[^7]
+- `ProfileService` extracts raw text from PDF resume uploads using `pdf-parse` and structures it into a comprehensive profile JSON (`profile.json`) containing contact, skills, experience, projects, and education using Llama 3.3.
+- `AgentController` provides the interactive REST API endpoints for uploading resumes, getting profile info, generating recommended search titles, and triggering runs.
+- `AgentService` remains in standby mode upon bootstrapping and is invoked asynchronously when the user confirms search titles via the API.
 - `LinkedInAgent` uses Chromium with custom scripts (blocking WebGL/Canvas fingerprinting, masking webdriver) and human-like typing to scrape jobs securely.[^8]
 - `AtsPortalsAgent`, `StartupBoardsAgent`, and `IndiaFocusedAgent` query the **TinyFish Search API** directly, bypassing expired caches and avoiding Playwright execution overhead.
-- `IntelligenceService` uses `ChatGroq` with `llama-3.3-70b-versatile` and parses structured output into `JobScore` fields, refining company names and physical locations from titles and snippets.[^9]
+- `IntelligenceService` uses a multi-provider fallback configuration (Gemini API, Groq with `llama-3.3-70b-versatile`, or local Ollama) and parses structured output into `JobScore` fields, refining company names and physical locations from titles and snippets.[^9]
 - `MemoryService` persists dedupe state as a flat JSON array of SHA-256 strings in `seen_jobs.json` using a compound key (`company|title|location|source`).[^10]
 - `NotifierService` sends Markdown messages to Telegram using native `fetch` and skips alerts when credentials are missing.[^11]
 
