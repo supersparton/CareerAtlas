@@ -99,11 +99,22 @@
 
 ---
 
-### Phase 5: Scheduler (Planned)
+### Phase 5: Production Recommendation Engine & pgvector Integration ✅ COMPLETE
+- [x] Set up PostgreSQL and `pgvector` schema database initialization on module bootstrap.
+- [x] Configured local ONNX inference engine via `@xenova/transformers` for fast `bge-small-en-v1.5` embeddings.
+- [x] Split user profiles into structured preferences tables, skills tables, and accomplishments/experience text embeddings.
+- [x] Added early-stage job validation (duplicate database checks, freshness filters, and non-blocking URL ping tests).
+- [x] Implemented structured job requirements extraction with DB caching.
+- [x] Developed MatchingService implementing Hard Filters, normalized skill overlap, experience years check, and education level matching.
+- [x] Updated AgentService orchestration to run the complete multi-stage pipeline.
+
+---
+
+### Phase 6: Scheduler (Planned)
 - [ ] Add daily scheduler (APScheduler or Windows Task Scheduler).
 - [ ] Agent automatically runs at 9:00 AM every day without manual trigger.
 
-### Phase 6: Dynamic Company Discovery (Planned)
+### Phase 7: Dynamic Company Discovery (Planned)
 - [ ] Integrate TinyFish **Search API** to find company career pages by query.
 - [ ] Agent can discover new companies dynamically (not just hardcoded URLs).
 
@@ -112,4 +123,3 @@
 ## 🔄 Changelog
 
 *Note: The Changelog has been moved to `CHANGELOG.md` for more detailed tracking.*
-

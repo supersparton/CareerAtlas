@@ -2,6 +2,28 @@
 
 > **AI Agent Note:** This file tracks a detailed record of changes in the project. Update this file every time a significant update, fix, or feature is added. Use the format below.
 
+## [2026-06-12] - 00:50
+### Summary
+Refactored the CareerOS job matching architecture from a simple LLM-based profile comparison into a production-grade multi-stage recommendation system. Added PostgreSQL database tables, pgvector vector storage integration, local BGE-small embedding inference via Xenova Transformers, a fast multi-step validation engine, structured JD requirements extraction, and a weighted multi-criteria ranking algorithm.
+
+### Added
+- **PostgreSQL & pgvector Storage (`vector-store` module)**: Built a NestJS `DatabaseService` using a relational PostgreSQL Pool. It automatically checks and enables the `pgvector` extension, creates tables for `users`, `user_preferences`, `user_skills`, `user_embeddings`, `jobs`, `job_requirements`, and `job_embeddings`, and compiles an HNSW index for sub-millisecond similarity lookups.
+- **Local BGE-Small Embedding Generator (`embeddings` module)**: Created an `EmbeddingsService` executing ONNX-compiled `Xenova/bge-small-en-v1.5` natively in Node.js, returning 384-dimensional vectors with fallback handlers for Gemini API.
+- **Structured Profile Schema & Sync (`profile` module)**: Integrated an LLM-driven parser compiling PDF resumes into detailed profiles. Synchronized the active resume profile into relational database tables and generated a User Embedding combining experience, accomplishments, and education.
+- **Validation Engine (`validation` module)**: Added validation checks to screen duplicate jobs (cross-checking database and memory), filter expired postings (older than 30 days), and test apply URLs using fast HEAD/GET fetch checks.
+- **Job Intelligence Extraction (`intelligence` module)**: Created `JobIntelligenceService` which extracts structured job requirements (skills, experience required, education, employment type, location, and remote status) and generates Job Description embeddings for vector storage.
+- **Weighted Multi-Stage Matching & Ranking (`matching` module)**: Implemented:
+  - **Hard Filter Engine**: Filtering location, remote status, employment types, and experience years.
+  - **Skill Match Engine**: Computing exact overlap percentages with a normalized alias mapping layer (e.g. FastAPI -> Python, NestJS -> Node.js).
+  - **Embedding Match Engine**: Direct database pgvector cosine similarity calculation.
+  - **Experience & Education Scorers**: Non-linear experience scoring and education level alignment.
+  - **Weighted Ranking Engine**: Aggregating match ratings: 50% Skill + 30% Semantic (pgvector) + 15% Experience + 5% Education.
+
+### Changed
+- **Agent Loop Orchestrator (`agent.service.ts`)**: Rewrote the loop to call validation, job processing, and matching/ranking engines. Syncs the candidate's `profile.json` to PostgreSQL on bootstrap.
+
+---
+
 ## [2026-06-09] - 02:25
 ### Summary
 Consolidated backend optimization, LLM reliability, and scraping improvements. Integrated local Ollama support and Gemini primary API with fallback mechanisms, resolved parallel orchestrator execution loops, tightened recency and experience scoring filters, and restored LinkedIn guest mode scraping.
