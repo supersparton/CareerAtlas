@@ -13,10 +13,11 @@ export class ValidationService {
   ) {}
 
   /**
-   * Validates a batch of scraped jobs. Filters out duplicates, expired jobs, and broken links.
+   * Validates a batch of scraped jobs. Filters out duplicates, expired jobs, broken links,
+   * irrelevant titles, and location mismatches.
    * Returns only validated jobs.
    */
-  async validateJobs(jobs: Job[]): Promise<Job[]> {
+  async validateJobs(jobs: Job[], searchTerm?: string, profile?: any): Promise<Job[]> {
     this.logger.log(`[VALIDATION] Running validation checks on ${jobs.length} jobs...`);
     const validatedJobs: Job[] = [];
 
@@ -41,6 +42,16 @@ export class ValidationService {
           return { job, valid: false, reason: 'Broken Link' };
         }
 
+        // 4. Check Title Relevance
+        if (searchTerm && !this.isTitleRelevant(job.title, searchTerm)) {
+          return { job, valid: false, reason: `Irrelevant title for search: "${searchTerm}"` };
+        }
+
+        // 5. Check Location Relevance
+        if (profile && !this.isLocationRelevant(job.location, profile)) {
+          return { job, valid: false, reason: `Location "${job.location}" doesn't match candidate preferences` };
+        }
+
         return { job, valid: true };
       } catch (err) {
         this.logger.error(`[VALIDATION] Exception validating job "${job.title}": ${err.message}`);
@@ -60,6 +71,83 @@ export class ValidationService {
 
     this.logger.log(`[VALIDATION] Validation complete. ${validatedJobs.length} / ${jobs.length} jobs approved.`);
     return validatedJobs;
+  }
+
+  private isTitleRelevant(jobTitle: string, searchTerm: string): boolean {
+    const titleLower = jobTitle.toLowerCase();
+    const searchLower = searchTerm.toLowerCase();
+
+    // 1. Exact or partial substring match
+    if (titleLower.includes(searchLower) || searchLower.includes(titleLower)) {
+      return true;
+    }
+
+    const normTitle = jobTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // 2. Extract key terms from search term (ignoring general words)
+    const searchWords = searchLower
+      .split(/[\s\-/,()]+/)
+      .map(w => w.trim())
+      .filter(w => w.length > 2 && w !== 'developer' && w !== 'engineer' && w !== 'job' && w !== 'intern' && w !== 'role');
+
+    if (searchWords.length > 0) {
+      // Check if the normalized job title contains at least one of the normalized search words
+      const matchesSearchWord = searchWords.some(word => {
+        const normWord = word.replace(/[^a-z0-9]/g, '');
+        return normTitle.includes(normWord);
+      });
+      if (!matchesSearchWord) {
+        return false;
+      }
+    }
+
+    // 3. Negations: If the job title contains negative keywords like "sales", "hr", "marketing", "manager"
+    const negativeKeywords = ['sales', 'marketing', 'recruiter', 'hr', 'accountant', 'ticketing', 'travel', 'admin', 'writer', 'seo'];
+    const hasNegative = negativeKeywords.some(neg => {
+      // Only reject if the search term does NOT contain this negative keyword
+      return titleLower.includes(neg) && !searchLower.includes(neg);
+    });
+
+    if (hasNegative) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private isLocationRelevant(jobLocation: string, profile: any): boolean {
+    if (!profile || !profile.preferences) {
+      return true;
+    }
+    
+    const locations = profile.preferences.locations || [];
+    const isRemoteOpen = profile.preferences.remote ?? true;
+    
+    const jobLocLower = jobLocation.toLowerCase();
+    
+    // If the job is remote, and the candidate is open to remote, it's valid
+    const isJobRemote = jobLocLower.includes('remote');
+    if (isJobRemote && isRemoteOpen) {
+      return true;
+    }
+    
+    // If candidate has specific physical location preferences
+    if (locations.length > 0) {
+      const hasMatch = locations.some(loc => {
+        const locLower = loc.toLowerCase();
+        return jobLocLower.includes(locLower) || locLower.includes(jobLocLower);
+      });
+      if (hasMatch) {
+        return true;
+      }
+    }
+    
+    // If candidate wants remote, and job is remote (handled above), or candidate is open to any location (locations is empty)
+    if (locations.length === 0 && isRemoteOpen) {
+      return true;
+    }
+    
+    return false;
   }
 
   private async isDuplicate(job: Job): Promise<boolean> {

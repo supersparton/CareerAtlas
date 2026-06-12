@@ -90,6 +90,11 @@ export class ProfileService {
     };
   }
 
+  async invokeModel(promptText: string): Promise<string> {
+    return this.invokeModelWithFallback(promptText);
+  }
+
+
   private async invokeOllama(promptText: string): Promise<string> {
     const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
     const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
@@ -206,6 +211,15 @@ export class ProfileService {
         cleaned = '{' + remaining;
       }
     }
+
+    // Strip single-line comments (//...) but avoid stripping double slashes in URLs (http:// or https://)
+    cleaned = cleaned.replace(/(^|[^\u003a])\/\/.*$/gm, '$1');
+    // Strip multi-line comments (/*...*/)
+    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Strip trailing commas in arrays and objects to prevent JSON parse errors, including unicode spaces and newlines
+    cleaned = cleaned.replace(/,[\s\xa0\u2000-\u200b]*\]/g, ']');
+    cleaned = cleaned.replace(/,[\s\xa0\u2000-\u200b]*\}/g, '}');
 
     // Repair cut-off JSON if necessary
     try {
@@ -548,8 +562,11 @@ Do not include any conversational filler, explanation, or markdown formatting (s
     this.logger.log(`[PROFILE] Generating title suggestions for role: "${activeProfile.preferredRoles.join(', ')}"...`);
 
     const prompt = PromptTemplate.fromTemplate(`
-      You are an elite career advisor. Based on the candidate's preferences below, suggest 4 to 6 specific, high-intent job title search terms to query job boards.
-      Focus on terms that match their skills and preferred roles. Do NOT use overly broad terms like "Engineer".
+      You are an elite career advisor. Based on the candidate's preferences below, suggest 4 to 6 specific, standard, industry-common job title search terms to query job boards.
+      Focus on terms that match their skills and preferred roles (e.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", "Software Engineer").
+      Do NOT suggest rare, highly-specialized, or niche titles (such as "Agentic AI Developer", "Generative AI Engineer", "LLM Specialist") unless the candidate has extensive professional experience in those specific areas.
+      For junior candidates (under 3 years of experience), stick strictly to entry-level or standard software engineering titles. Do NOT use overly broad terms like "Engineer".
+      Do NOT suggest project names, specific technologies that are not job titles, or candidate achievements as search terms. Every suggestion MUST be a standard, widely-recognized job title.
       
       Candidate Profile:
       - Preferred Roles: {preferredRoles}

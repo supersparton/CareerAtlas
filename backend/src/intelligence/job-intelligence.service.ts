@@ -128,6 +128,15 @@ export class JobIntelligenceService {
       cleaned = cleaned.substring(startIndex);
     }
 
+    // Strip single-line comments (//...) but avoid stripping double slashes in URLs (http:// or https://)
+    cleaned = cleaned.replace(/(^|[^\u003a])\/\/.*$/gm, '$1');
+    // Strip multi-line comments (/*...*/)
+    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Strip trailing commas in arrays and objects to prevent JSON parse errors, including unicode spaces and newlines
+    cleaned = cleaned.replace(/,[\s\xa0\u2000-\u200b]*\]/g, ']');
+    cleaned = cleaned.replace(/,[\s\xa0\u2000-\u200b]*\}/g, '}');
+
     // Repair cut-off JSON if necessary
     try {
       JSON.parse(cleaned);
@@ -206,7 +215,7 @@ export class JobIntelligenceService {
 Job Details:
 - Title: ${job.title}
 - Company: ${job.company}
-- Location (Placeholder): ${job.location}
+- Location (From Scraper): ${job.location}
 - Description/Snippet: ${job.description.substring(0, 25000)}
 
 You MUST respond ONLY with a valid JSON object matching the following structure:
@@ -217,9 +226,10 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   "educationRequirements": ["degree1"],
   "employmentType": "Full-time",
   "remoteAllowed": true,
-  "location": "Ahmedabad"
+  "location": null
 }
 
+If any field (such as requiredSkills, experienceRequired, or location) cannot be determined from the description snippet, you MUST set them to [] (empty array), 0, or null respectively. Do not hallucinate or use the example values.
 Do not include any conversational filler, explanation, or markdown formatting (such as \`\`\`json). Return only the raw JSON object.`;
 
     try {
@@ -247,7 +257,18 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         educationRequirements: parseArray(parsed.educationRequirements),
         employmentType: String(parsed.employmentType || 'Full-time').trim(),
         remoteAllowed: typeof parsed.remoteAllowed === 'boolean' ? parsed.remoteAllowed : String(parsed.remoteAllowed).toLowerCase() === 'true',
-        location: String(parsed.location || job.location).trim(),
+        location: (() => {
+          const llmLoc = parsed.location && String(parsed.location).trim();
+          if (llmLoc && llmLoc.toLowerCase() !== 'null' && llmLoc.toLowerCase() !== 'unknown' && llmLoc.toLowerCase() !== 'remote') {
+            return llmLoc;
+          }
+          const rawLoc = (job.location || '').trim();
+          const isQuery = rawLoc.includes(' OR ') || rawLoc.includes('(') || rawLoc.includes(')');
+          if (isQuery) {
+            return llmLoc ? llmLoc : 'Remote';
+          }
+          return rawLoc ? rawLoc : (llmLoc ? llmLoc : 'Remote');
+        })(),
       };
 
       // Generate job description embedding
@@ -270,7 +291,11 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         educationRequirements: [],
         employmentType: 'Full-time',
         remoteAllowed: /remote|hybrid/i.test(job.location + job.description),
-        location: job.location,
+        location: (() => {
+          const rawLoc = (job.location || '').trim();
+          const isQuery = rawLoc.includes(' OR ') || rawLoc.includes('(') || rawLoc.includes(')');
+          return isQuery ? 'Remote' : (rawLoc || 'Remote');
+        })(),
       };
 
       try {
@@ -311,13 +336,13 @@ Do not include any conversational filler, explanation, or markdown formatting (s
     try {
       await client.query('BEGIN');
 
-      // 1. Insert into jobs table
+      // 1. Insert into jobs table using resolved location
       await client.query(`
         INSERT INTO jobs (id, title, company, url, description, location, posting_date)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (id) DO UPDATE 
         SET title = EXCLUDED.title, company = EXCLUDED.company, description = EXCLUDED.description, location = EXCLUDED.location
-      `, [job.jobId, job.title, job.company, job.applyUrl, job.description, job.location, new Date()]);
+      `, [job.jobId, job.title, job.company, job.applyUrl, job.description, reqs.location, new Date()]);
 
       // 2. Insert into job_requirements table
       await client.query(`

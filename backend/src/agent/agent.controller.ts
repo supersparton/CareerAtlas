@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus, Logger } from '@nestjs/common';
 import { AgentService } from './agent.service';
 
 export interface StartWorkflowDto {
@@ -6,6 +6,8 @@ export interface StartWorkflowDto {
   locationPreference: string;
   isRemoteOpen: boolean;
   userEmail?: string;
+  employmentTypes?: string[];
+  salaryExpectation?: number;
 }
 
 @Controller('api')
@@ -15,6 +17,11 @@ export class AgentController {
   constructor(
     private readonly agentService: AgentService,
   ) {}
+
+  @Get('agent/status')
+  getAgentStatus() {
+    return this.agentService.getPipelineStatus();
+  }
 
   // Trigger the job search scraper workflow in the background
   @Post('agent/run')
@@ -28,6 +35,8 @@ export class AgentController {
     const locationPref = body.locationPreference || 'Remote';
     const isRemoteOpen = body.isRemoteOpen ?? true;
     const userEmail = body.userEmail;
+    const employmentTypes = body.employmentTypes || ['Full-time'];
+    const salaryExpectation = body.salaryExpectation !== undefined ? body.salaryExpectation : null;
 
     let locationSearch = `"${locationPref}"`;
     if (isRemoteOpen && locationPref.toLowerCase() !== 'remote') {
@@ -41,7 +50,15 @@ export class AgentController {
     // Trigger run in the background via runWorkflowSuite
     (async () => {
       try {
-        await this.agentService.runWorkflowSuite(searchTerms, locationSearch, locationPref, isRemoteOpen, userEmail);
+        await this.agentService.runWorkflowSuite(
+          searchTerms,
+          locationSearch,
+          locationPref,
+          isRemoteOpen,
+          userEmail,
+          employmentTypes,
+          salaryExpectation,
+        );
         this.logger.log('[BACKGROUND AGENT] Finished all run cycles.');
       } catch (err) {
         this.logger.error('[BACKGROUND AGENT] Run failed', err);

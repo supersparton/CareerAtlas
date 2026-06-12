@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { UserProfile } from '../profile/profile.service';
+import { MemoryService } from '../memory/memory.service';
 import { JobRequirements } from '../intelligence/job-intelligence.service';
 import { Job } from '../discovery/discovery.service';
 
@@ -68,7 +69,10 @@ export class MatchingService {
     'k8s': 'devops',
   };
 
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly memoryService: MemoryService,
+  ) {}
 
   /**
    * Main Orchestrator for Job Recommendation matching pipeline.
@@ -87,8 +91,13 @@ export class MatchingService {
     const jobsWithReqs = await this.getIngestedJobs();
     this.logger.log(`[MATCHING] Loaded ${jobsWithReqs.length} total jobs from database.`);
 
-    // 3. Stage 3: Apply Hard Filters
-    const filteredJobs = jobsWithReqs.filter(({ reqs }) => this.applyHardFilters(profile, reqs));
+    // 3. Stage 3: Apply Hard Filters & Exclude already notified/seen jobs
+    const filteredJobs = jobsWithReqs.filter(({ job, reqs }) => {
+      if (this.memoryService.isJobMatched(job.company, job.title, job.location, job.source)) {
+        return false;
+      }
+      return this.applyHardFilters(profile, reqs);
+    });
     this.logger.log(`[MATCHING] Hard Filter Engine: Approved ${filteredJobs.length} / ${jobsWithReqs.length} jobs.`);
     
     if (filteredJobs.length === 0) return [];
@@ -110,19 +119,34 @@ export class MatchingService {
         // Stage 8: Education Match
         const educationResult = this.computeEducationScore(profile.education, reqs.educationRequirements);
 
+        // Location Match Boost: If physical location matches one of candidate's preferred cities
+        let locationBoost = 0;
+        let isLocalMatch = false;
+        if (profile.preferences.locations && profile.preferences.locations.length > 0) {
+          const jobLocLower = reqs.location.toLowerCase();
+          isLocalMatch = profile.preferences.locations.some(loc => 
+            jobLocLower.includes(loc.toLowerCase()) || loc.toLowerCase().includes(jobLocLower)
+          );
+          if (isLocalMatch) {
+            locationBoost = 15; // +15 boost to prioritize local opportunities
+          }
+        }
+
         // Stage 9: Weighted Ranking Engine
-        // Formula: 50% Skill + 30% Semantic + 15% Experience + 5% Education
-        const finalScore = Math.round(
+        // Formula: 50% Skill + 30% Semantic + 15% Experience + 5% Education + locationBoost
+        const baseScore = Math.round(
           (skillResult.score * 0.50) +
           (semanticResult.score * 0.30) +
           (experienceResult.score * 0.15) +
           (educationResult.score * 0.05)
         );
+        const finalScore = Math.min(100, baseScore + locationBoost);
 
         // Build explaining reasoning
         const reasoning = `Matches ${skillResult.overlapSkills.length} core skills (${skillResult.score}% match). ` +
           `Semantic match is ${Math.round(semanticResult.score)}%. ` +
-          `Experience requirement: ${reqs.experienceRequired} years vs Candidate: ${profile.experienceYears} years.`;
+          `Experience requirement: ${reqs.experienceRequired} years vs Candidate: ${profile.experienceYears} years.` +
+          (isLocalMatch ? ` Local match boost (+15) applied.` : '');
 
         rankedJobs.push({
           job,
@@ -138,8 +162,12 @@ export class MatchingService {
       }
     }
 
+    // Filter by threshold (minimum matching score of 50)
+    const qualifyingJobs = rankedJobs.filter(rj => rj.finalScore >= 50);
+    this.logger.log(`[MATCHING] Ranking Engine: ${qualifyingJobs.length} / ${rankedJobs.length} jobs met the threshold requirements (score >= 50).`);
+
     // Sort descending
-    const sorted = rankedJobs.sort((a, b) => b.finalScore - a.finalScore);
+    const sorted = qualifyingJobs.sort((a, b) => b.finalScore - a.finalScore);
     return sorted.slice(0, limit);
   }
 
@@ -154,7 +182,11 @@ export class MatchingService {
 
     // B. Remote preference:
     // If job does not allow remote and candidate ONLY wants remote
-    const candidateWantsOnlyRemote = profile.preferences.locations.length === 0 && profile.preferences.remote;
+    const candidateLocations = (profile.preferences.locations || [])
+      .map(loc => loc.trim())
+      .filter(Boolean);
+
+    const candidateWantsOnlyRemote = candidateLocations.length === 0 && profile.preferences.remote;
     if (candidateWantsOnlyRemote && !reqs.remoteAllowed) {
       return false;
     }
@@ -164,20 +196,36 @@ export class MatchingService {
     const isJobRemote = reqs.remoteAllowed || reqs.location.toLowerCase() === 'remote';
     const isCandidateOpenToRemote = profile.preferences.remote;
 
-    if (isJobRemote && isCandidateOpenToRemote) {
-      // Valid remote match
-    } else if (profile.preferences.locations.length > 0) {
-      // Compare physical locations
-      const jobLocLower = reqs.location.toLowerCase();
-      const hasLocMatch = profile.preferences.locations.some(loc => 
-        jobLocLower.includes(loc.toLowerCase()) || loc.toLowerCase().includes(jobLocLower)
-      );
-      if (!hasLocMatch) {
+    // If job is remote-only (no physical location, e.g. location is 'remote') and candidate is NOT open to remote:
+    if (reqs.location.toLowerCase() === 'remote' && !isCandidateOpenToRemote) {
+      return false;
+    }
+
+    if (candidateLocations.length > 0) {
+      // Candidate has specific physical location preferences.
+      // If the job is remote and candidate is open to remote, it's a valid match.
+      // Otherwise, the job MUST have a physical location that matches one of the candidate's preferences.
+      if (isJobRemote && isCandidateOpenToRemote) {
+        // Valid remote match
+      } else {
+        const jobLocLower = reqs.location.toLowerCase();
+        const hasLocMatch = candidateLocations.some(loc => 
+          jobLocLower.includes(loc.toLowerCase()) || loc.toLowerCase().includes(jobLocLower)
+        );
+        if (!hasLocMatch) {
+          return false;
+        }
+      }
+    } else {
+      // Candidate has no specific physical location preferences (i.e. open to any physical location).
+      // If they are NOT open to remote, and the job is remote-only, reject it.
+      if (!isCandidateOpenToRemote && isJobRemote && reqs.location.toLowerCase() === 'remote') {
         return false;
       }
-    } else if (!isJobRemote) {
-      // Candidate wants remote, job is onsite in some unspecified city
-      return false;
+      // If they ONLY want remote (remote: true, locations: []), and the job is not remote:
+      if (isCandidateOpenToRemote && candidateLocations.length === 0 && !isJobRemote) {
+        return false;
+      }
     }
 
     // D. Employment Type constraint:

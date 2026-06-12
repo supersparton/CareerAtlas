@@ -1,6 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Job } from '../discovery/discovery.service';
 
+function escapeHtml(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 @Injectable()
 export class NotifierService {
   private readonly logger = new Logger(NotifierService.name);
@@ -18,16 +26,16 @@ export class NotifierService {
       return;
     }
 
-    const message = `🚨 *New High-Match Job Found!* 🚨\n\n` +
-      `💼 *Role:* ${job.title}\n` +
-      `🏢 *Company:* ${job.company}\n` +
-      `📍 *Location:* ${job.location}\n` +
-      `🎯 *Match Score:* *${finalScore}/100*\n` +
-      `  • _Skills:_ ${subScores.skills}/100\n` +
-      `  • _Experience:_ ${subScores.experience}/100\n` +
-      `  • _Location:_ ${subScores.location}/100\n\n` +
-      `🧠 *AI Reasoning:* ${reasoning}\n\n` +
-      `🔗 [Apply Here](${job.applyUrl})`;
+    const message = `🚨 <b>New High-Match Job Found!</b> 🚨\n\n` +
+      `💼 <b>Role:</b> ${escapeHtml(job.title)}\n` +
+      `🏢 <b>Company:</b> ${escapeHtml(job.company)}\n` +
+      `📍 <b>Location:</b> ${escapeHtml(job.location)}\n` +
+      `🎯 <b>Match Score:</b> <b>${finalScore}/100</b>\n` +
+      `  • <i>Skills:</i> ${subScores.skills}/100\n` +
+      `  • <i>Experience:</i> ${subScores.experience}/100\n` +
+      `  • <i>Location:</i> ${subScores.location}/100\n\n` +
+      `🧠 <b>AI Reasoning:</b> ${escapeHtml(reasoning)}\n\n` +
+      `🔗 <a href="${job.applyUrl}">Apply Here</a>`;
 
     const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
 
@@ -40,7 +48,7 @@ export class NotifierService {
         body: JSON.stringify({
           chat_id: this.chatId,
           text: message,
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
         }),
       });
 

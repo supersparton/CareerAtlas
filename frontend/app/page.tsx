@@ -22,7 +22,12 @@ interface ParsedProfile {
   targetRole: string;
   coreSkills: string[];
   experienceLevel: string;
-  preferences: string;
+  preferences?: {
+    locations: string[];
+    remote: boolean;
+    employmentTypes?: string[];
+    salaryExpectation?: number;
+  };
   targetLocation: string;
   isRemoteOpen: boolean;
   experience: ResumeWorkExperience[];
@@ -47,6 +52,8 @@ export default function Home() {
   const [newTermInput, setNewTermInput] = useState<string>("");
   const [locationPref, setLocationPref] = useState<string>("Ahmedabad");
   const [isRemoteOpen, setIsRemoteOpen] = useState<boolean>(true);
+  const [employmentTypes, setEmploymentTypes] = useState<string[]>(["Full-time"]);
+  const [salaryExpectation, setSalaryExpectation] = useState<string>("");
   
   // Status and logs
   const [logs, setLogs] = useState<string[]>([]);
@@ -88,6 +95,12 @@ export default function Home() {
           setProfile(data);
           setLocationPref(data.targetLocation || "Ahmedabad");
           setIsRemoteOpen(data.isRemoteOpen ?? true);
+          if (data.preferences?.employmentTypes && data.preferences.employmentTypes.length > 0) {
+            setEmploymentTypes(data.preferences.employmentTypes);
+          }
+          if (data.preferences?.salaryExpectation !== undefined && data.preferences?.salaryExpectation !== null) {
+            setSalaryExpectation(String(data.preferences.salaryExpectation));
+          }
           addLog("Loaded existing profile from backend cache.");
           fetchSuggestions();
         }
@@ -126,6 +139,12 @@ export default function Home() {
       setProfile(parsedData);
       setLocationPref(parsedData.targetLocation || "Ahmedabad");
       setIsRemoteOpen(parsedData.isRemoteOpen ?? true);
+      if (parsedData.preferences?.employmentTypes && parsedData.preferences.employmentTypes.length > 0) {
+        setEmploymentTypes(parsedData.preferences.employmentTypes);
+      }
+      if (parsedData.preferences?.salaryExpectation !== undefined && parsedData.preferences?.salaryExpectation !== null) {
+        setSalaryExpectation(String(parsedData.preferences.salaryExpectation));
+      }
       addLog(`Resume parsed successfully for ${parsedData.fullName}!`);
       
       // Auto-fetch suggestions after upload
@@ -182,17 +201,6 @@ export default function Home() {
     setPipelineSteps(prev => prev.map(s => ({ ...s, status: "idle", errorDetails: undefined })));
 
     try {
-      // Step 1: Profile Sync
-      updateStepStatus("step-1", "running");
-      addLog("Syncing profile details and user embedding with PostgreSQL / Supabase...");
-      await new Promise(r => setTimeout(r, 1200));
-      updateStepStatus("step-1", "success");
-      addLog("Profile synchronized and BGE-small user embedding saved successfully.");
-
-      // Step 2: Discovery Ingestion
-      updateStepStatus("step-2", "running");
-      addLog("Triggering parallel scraping agents for: " + searchTerms.join(", "));
-      
       const res = await fetch("/api/agent/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -201,59 +209,62 @@ export default function Home() {
           locationPreference: locationPref,
           isRemoteOpen,
           userEmail: profile?.email,
+          employmentTypes,
+          salaryExpectation: salaryExpectation ? parseInt(salaryExpectation, 10) : null,
         }),
       });
 
       if (!res.ok) {
         const errMsg = await res.text() || "Failed to start scraping suite.";
-        updateStepStatus("step-2", "error", errMsg);
         throw new Error(errMsg);
       }
 
       const result = await res.json();
       addLog(`Backend Response: ${result.message}`);
-      await new Promise(r => setTimeout(r, 1500));
-      updateStepStatus("step-2", "success");
+      addLog("Starting real-time execution tracking polling...");
 
-      // Step 3: Validation
-      updateStepStatus("step-3", "running");
-      addLog("Validation Layer: Deduplicating and testing active URL link status...");
-      await new Promise(r => setTimeout(r, 1800));
-      updateStepStatus("step-3", "success");
-      addLog("Validation Layer passed: duplicate, expired, and broken links pruned.");
+      // Start polling backend status endpoint
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch("/api/agent/status");
+          if (statusRes.ok) {
+            const backendStatus = await statusRes.json();
+            
+            // Sync step statuses
+            setPipelineSteps(prev => prev.map(step => {
+              const backendStep = backendStatus.steps[step.id];
+              if (backendStep) {
+                return {
+                  ...step,
+                  status: backendStep.status,
+                  errorDetails: backendStep.errorDetails
+                };
+              }
+              return step;
+            }));
 
-      // Step 4: Structured Extraction
-      updateStepStatus("step-4", "running");
-      addLog("Job Intelligence: Extracting structured JDs via LLM...");
-      await new Promise(r => setTimeout(r, 1500));
-      updateStepStatus("step-4", "success");
+            // Sync logs
+            if (backendStatus.logs && backendStatus.logs.length > 0) {
+              setLogs(backendStatus.logs);
+            }
 
-      // Step 5: pgvector Store
-      updateStepStatus("step-5", "running");
-      addLog("Generating job embeddings and inserting into pgvector table...");
-      await new Promise(r => setTimeout(r, 1200));
-      updateStepStatus("step-5", "success");
-
-      // Step 6: Multi-Stage Match Engines
-      updateStepStatus("step-6", "running");
-      addLog("Running Hard Filters, Skill Normalization Mapping, and pgvector Cosine Match...");
-      await new Promise(r => setTimeout(r, 1600));
-      updateStepStatus("step-6", "success");
-
-      // Step 7: Weighted Ranking & Notification
-      updateStepStatus("step-7", "running");
-      addLog("Ranking recommendations and executing Application Agent alerts...");
-      await new Promise(r => setTimeout(r, 1400));
-      updateStepStatus("step-7", "success");
-      addLog("Top recommended jobs delivered to Telegram chat.");
+            // If backend is no longer active, stop polling
+            if (!backendStatus.active) {
+              clearInterval(pollInterval);
+              setWorkflowRunning(false);
+              addLog("Real-time pipeline run completed.");
+            }
+          }
+        } catch (pollErr: any) {
+          // Ignore polling errors
+        }
+      }, 1000);
 
     } catch (e: any) {
       addLog(`Pipeline Aborted: ${e.message}`);
-      // Find the currently running step and mark it as error
       setPipelineSteps(prev => prev.map(s => 
         s.status === "running" ? { ...s, status: "error", errorDetails: e.message } : s
       ));
-    } finally {
       setWorkflowRunning(false);
     }
   };
@@ -384,6 +395,60 @@ export default function Home() {
                         }`}
                       />
                     </button>
+                  </div>
+                </div>
+
+                {/* Employment & Compensation */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                      Employment Type Preference
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {["Full-time", "Part-time", "Contract", "Internship"].map((type) => {
+                        const isSelected = employmentTypes.includes(type);
+                        return (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                if (employmentTypes.length > 1) {
+                                  setEmploymentTypes(employmentTypes.filter(t => t !== type));
+                                }
+                              } else {
+                                setEmploymentTypes([...employmentTypes, type]);
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                              isSelected
+                                ? "bg-emerald-500/15 border-emerald-500 text-emerald-400"
+                                : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                            }`}
+                          >
+                            {type}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                      Salary Expectation (Annual)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={salaryExpectation}
+                        onChange={(e) => setSalaryExpectation(e.target.value)}
+                        placeholder="e.g. 1200000"
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-4 pr-24 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                        INR / Year
+                      </span>
+                    </div>
                   </div>
                 </div>
 
