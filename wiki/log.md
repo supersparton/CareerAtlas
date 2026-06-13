@@ -5,6 +5,11 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-06-13] release | Visual Architecture Flowchart & Technical Diagramming
+- Designed and documented the complete end-to-end user onboarding and autonomous scraping pipeline in the [System Flowchart](flowchart.md).
+- Integrated draw.io interactive diagram support using Mermaid.js syntax and the `drawio-master` technical design specifications.
+- Documented actors, step-by-step flows, technical assumptions, and future enhancements of the NestJS discovery and pgvector scoring backend.
+
 ## [2026-06-09] release | Consolidated Backend Optimization & Multi-LLM Fallback
 - Configured tri-level LLM fallback chain (Ollama → Gemini → Groq) to bypass online rate-limiting constraints during local development.
 - Refactored orchestrator loop to track global matches across search terms, terminating the search cycles immediately once the target threshold of 5 jobs is met.
