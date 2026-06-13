@@ -130,36 +130,6 @@ export class ProfileService {
       }
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (geminiApiKey) {
-      this.logger.log('[PROFILE: LLM] Attempting Gemini API call (Primary)...');
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }],
-            }),
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) {
-            this.logger.log('[PROFILE: LLM] Gemini API call succeeded.');
-            return text;
-          }
-        }
-        const errText = await response.text();
-        this.logger.warn(`[PROFILE: LLM] Gemini API failed with status ${response.status}: ${errText}. Falling back to Groq...`);
-      } catch (err) {
-        this.logger.warn(`[PROFILE: LLM] Gemini API exception: ${err.message}. Falling back to Groq...`);
-      }
-    }
-
     try {
       this.logger.log('[PROFILE: LLM] Invoking Groq model (Secondary)...');
       const response = await this.model.invoke(promptText);
@@ -295,6 +265,7 @@ export class ProfileService {
         const parsed = await parser.getText();
         pdfText = parsed.text || '';
       } 
+      
       // 2. Try v1 style function default export
       else if (typeof _pdfModule === 'function') {
         this.logger.log('[PROFILE] Using pdf-parse v1 function...');
@@ -359,8 +330,7 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   "salaryExpectation": null
 }
 
-If any preference (such as preferredLocations or salaryExpectation) is not explicitly mentioned in the resume text, you MUST return them as [] or null as shown above. Do not guess or copy these examples.
-Do not include any conversational filler, explanation, or markdown formatting (such as \`\`\`json). Return only the raw JSON object.`;
+If any preference (such as preferredLocations or salaryExpectation or preferredRoles) is not explicitly mentioned in the resume text, you MUST return them as [] or null as shown above.Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.ALSO DO NOT ADD PREFFERED ROLES IF NOT EXPLICITLY MENTIONED IN THE RESUME.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
 
     try {
       const responseText = await this.invokeModelWithFallback(prompt);
@@ -563,9 +533,8 @@ Do not include any conversational filler, explanation, or markdown formatting (s
 
     const prompt = PromptTemplate.fromTemplate(`
       You are an elite career advisor. Based on the candidate's preferences below, suggest 4 to 6 specific, standard, industry-common job title search terms to query job boards.
-      Focus on terms that match their skills and preferred roles (e.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", "Software Engineer").
+      Focus on terms that match their skills and preferred roles(if found any from the profile). E.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", "Software Engineer".
       Do NOT suggest rare, highly-specialized, or niche titles (such as "Agentic AI Developer", "Generative AI Engineer", "LLM Specialist") unless the candidate has extensive professional experience in those specific areas.
-      For junior candidates (under 3 years of experience), stick strictly to entry-level or standard software engineering titles. Do NOT use overly broad terms like "Engineer".
       Do NOT suggest project names, specific technologies that are not job titles, or candidate achievements as search terms. Every suggestion MUST be a standard, widely-recognized job title.
       
       Candidate Profile:

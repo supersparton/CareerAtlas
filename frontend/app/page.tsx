@@ -290,9 +290,6 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs bg-zinc-900 px-3 py-1.5 rounded-full border border-zinc-800 text-zinc-400">
-              NestJS Endpoint: <code className="text-zinc-300 font-mono">localhost:3001</code>
-            </span>
           </div>
         </header>
 

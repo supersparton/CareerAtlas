@@ -66,30 +66,6 @@ export class JobIntelligenceService {
       }
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (geminiApiKey) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }],
-            }),
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) return text;
-        }
-      } catch (err) {
-        this.logger.warn(`[JOB-INTEL: LLM] Gemini API exception: ${err.message}. Falling back to Groq...`);
-      }
-    }
-
     const response = await this.model.invoke(promptText);
     return response.content as string;
   }

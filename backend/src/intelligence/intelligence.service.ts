@@ -72,45 +72,6 @@ export class IntelligenceService {
       }
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (geminiApiKey) {
-      this.logger.log('[LLM: SCORER] Attempting Gemini API call (Primary)...');
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              contents: [{
-                parts: [{
-                  text: promptText
-                }]
-              }]
-            }),
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) {
-            this.logger.log('[LLM: SCORER] Gemini API call succeeded.');
-            return text;
-          }
-        }
-        
-        const errText = await response.text();
-        this.logger.warn(`[LLM: SCORER] Gemini API failed with status ${response.status}: ${errText}. Falling back to Groq...`);
-      } catch (err) {
-        this.logger.warn(`[LLM: SCORER] Gemini API exception: ${err.message}. Falling back to Groq...`);
-      }
-    } else {
-      this.logger.log('[LLM: SCORER] GEMINI_API_KEY/GOOGLE_API_KEY not configured. Using Groq as secondary...');
-    }
-
     // Secondary provider: Groq
     try {
       this.logger.log('[LLM: SCORER] Invoking Groq model (Secondary)...');

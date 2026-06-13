@@ -177,16 +177,20 @@ export class AgentService implements OnApplicationBootstrap {
 
       // 3. Structured Extraction & Embedding Generation & pgvector Insertion (JobIntelligenceService)
       this.logger.log('[ORCHESTRATOR] Processing structured requirements and generating embeddings for validated jobs...');
-      const extractionPromises = validatedJobs.map(async (job) => {
-        try {
-          await this.jobIntelligenceService.processJob(job);
-          // Mark as processed in local MemoryService cache
-          this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
-        } catch (err) {
-          this.logger.error(`[ORCHESTRATOR] Failed to process/embed job ${job.jobId}: ${err.message}`);
-        }
-      });
-      await Promise.all(extractionPromises);
+      const extractionChunkSize = 4;
+      for (let i = 0; i < validatedJobs.length; i += extractionChunkSize) {
+        const chunk = validatedJobs.slice(i, i + extractionChunkSize);
+        const extractionPromises = chunk.map(async (job) => {
+          try {
+            await this.jobIntelligenceService.processJob(job);
+            // Mark as processed in local MemoryService cache
+            this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
+          } catch (err) {
+            this.logger.error(`[ORCHESTRATOR] Failed to process/embed job ${job.jobId}: ${err.message}`);
+          }
+        });
+        await Promise.all(extractionPromises);
+      }
 
       this.updateStep('step-4', 'success');
       this.updateStep('step-5', 'success');

@@ -25,9 +25,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       user: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD || 'postgres',
       database: process.env.DB_NAME || 'careeratlas',
-      max: 20,
+      max: 13,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 3500,
       ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
     });
 

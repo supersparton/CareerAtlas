@@ -20,52 +20,56 @@ export class ValidationService {
   async validateJobs(jobs: Job[], searchTerm?: string, profile?: any): Promise<Job[]> {
     this.logger.log(`[VALIDATION] Running validation checks on ${jobs.length} jobs...`);
     const validatedJobs: Job[] = [];
+    const chunkSize = 5;
 
-    // Run URL validation in parallel for speed
-    const validationPromises = jobs.map(async (job) => {
-      try {
-        // 1. Check Duplicates (both DB and local seen memory)
-        const isDupe = await this.isDuplicate(job);
-        if (isDupe) {
-          return { job, valid: false, reason: 'Duplicate' };
+    for (let i = 0; i < jobs.length; i += chunkSize) {
+      const chunk = jobs.slice(i, i + chunkSize);
+      
+      const validationPromises = chunk.map(async (job) => {
+        try {
+          // 1. Check Duplicates (both DB and local seen memory)
+          const isDupe = await this.isDuplicate(job);
+          if (isDupe) {
+            return { job, valid: false, reason: 'Duplicate' };
+          }
+
+          // 2. Check Expiry (dynamic freshness bounds)
+          const isExpired = this.isExpired(job);
+          if (isExpired) {
+            return { job, valid: false, reason: 'Expired' };
+          }
+
+          // 3. Check Broken URL (fast check)
+          const isUrlActive = await this.isUrlActive(job.applyUrl);
+          if (!isUrlActive) {
+            return { job, valid: false, reason: 'Broken Link' };
+          }
+
+          // 4. Check Title Relevance
+          if (searchTerm && !this.isTitleRelevant(job.title, searchTerm)) {
+            return { job, valid: false, reason: `Irrelevant title for search: "${searchTerm}"` };
+          }
+
+          // 5. Check Location Relevance
+          if (profile && !this.isLocationRelevant(job.location, profile)) {
+            return { job, valid: false, reason: `Location "${job.location}" doesn't match candidate preferences` };
+          }
+
+          return { job, valid: true };
+        } catch (err) {
+          this.logger.error(`[VALIDATION] Exception validating job "${job.title}": ${err.message}`);
+          return { job, valid: false, reason: `Error: ${err.message}` };
         }
+      });
 
-        // 2. Check Expiry (dynamic freshness bounds)
-        const isExpired = this.isExpired(job);
-        if (isExpired) {
-          return { job, valid: false, reason: 'Expired' };
+      const results = await Promise.all(validationPromises);
+      
+      for (const res of results) {
+        if (res.valid) {
+          validatedJobs.push(res.job);
+        } else {
+          this.logger.log(`[VALIDATION] ❌ Rejected: "${res.job.title}" at "${res.job.company}" (${res.reason})`);
         }
-
-        // 3. Check Broken URL (fast check)
-        const isUrlActive = await this.isUrlActive(job.applyUrl);
-        if (!isUrlActive) {
-          return { job, valid: false, reason: 'Broken Link' };
-        }
-
-        // 4. Check Title Relevance
-        if (searchTerm && !this.isTitleRelevant(job.title, searchTerm)) {
-          return { job, valid: false, reason: `Irrelevant title for search: "${searchTerm}"` };
-        }
-
-        // 5. Check Location Relevance
-        if (profile && !this.isLocationRelevant(job.location, profile)) {
-          return { job, valid: false, reason: `Location "${job.location}" doesn't match candidate preferences` };
-        }
-
-        return { job, valid: true };
-      } catch (err) {
-        this.logger.error(`[VALIDATION] Exception validating job "${job.title}": ${err.message}`);
-        return { job, valid: false, reason: `Error: ${err.message}` };
-      }
-    });
-
-    const results = await Promise.all(validationPromises);
-    
-    for (const res of results) {
-      if (res.valid) {
-        validatedJobs.push(res.job);
-      } else {
-        this.logger.log(`[VALIDATION] ❌ Rejected: "${res.job.title}" at "${res.job.company}" (${res.reason})`);
       }
     }
 

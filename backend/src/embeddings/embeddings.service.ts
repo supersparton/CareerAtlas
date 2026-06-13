@@ -38,42 +38,6 @@ export class EmbeddingsService implements OnModuleInit {
       }
     }
 
-    // Fallback: Gemini Embeddings API (if key is configured)
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (geminiApiKey) {
-      try {
-        this.logger.log('[EMBEDDINGS] Falling back to Gemini Embedding API...');
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiApiKey}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: 'models/text-embedding-004',
-              content: {
-                parts: [{ text }],
-              },
-            }),
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const values = data.embedding?.values;
-          if (Array.isArray(values)) {
-            this.logger.log(`[EMBEDDINGS] Gemini returned embedding of length ${values.length}. Truncating/Padding to 384...`);
-            // Gemini is 768 or 1536 dims. We must adjust to 384 for database schema compatibility if schema is 384.
-            return this.adjustDimensions(values, 384);
-          }
-        }
-        this.logger.warn(`[EMBEDDINGS] Gemini Embedding API responded with code: ${response.status}`);
-      } catch (err) {
-        this.logger.error(`[EMBEDDINGS] Gemini Embedding API exception: ${err.message}`);
-      }
-    }
-
     // Fallback: Simple deterministic semantic hashing if all else fails (to prevent pipeline crash)
     this.logger.warn('[EMBEDDINGS] Using mock/fallback deterministic hash embedding.');
     return this.generateMockEmbedding(text, 384);
