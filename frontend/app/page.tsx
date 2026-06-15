@@ -55,10 +55,26 @@ export default function Home() {
   const [employmentTypes, setEmploymentTypes] = useState<string[]>(["Full-time"]);
   const [salaryExpectation, setSalaryExpectation] = useState<string>("");
   
+  interface JobResult {
+    id: number;
+    jobId: string;
+    company: string;
+    title: string;
+    location: string;
+    source: string;
+    url?: string;
+    score: number;
+    reasoning: string;
+    status: string;
+    createdAt: string;
+  }
+
   // Status and logs
   const [logs, setLogs] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false);
   const [workflowRunning, setWorkflowRunning] = useState<boolean>(false);
+  const [results, setResults] = useState<JobResult[]>([]);
+  const [loadingResults, setLoadingResults] = useState<boolean>(false);
 
   // Pipeline Flow steps state
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
@@ -73,7 +89,9 @@ export default function Home() {
 
   // Load existing profile on mount if available
   useEffect(() => {
-    fetchProfile();
+    fetchProfile().then(() => {
+      fetchResults();
+    });
   }, []);
 
   const addLog = (message: string) => {
@@ -86,9 +104,27 @@ export default function Home() {
     ));
   };
 
+  const fetchResults = async (email?: string) => {
+    setLoadingResults(true);
+    try {
+      const emailParam = email ? `?email=${encodeURIComponent(email)}` : "";
+      const res = await fetch(`/api/agent/results${emailParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setResults(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Error loading recommendation results: ${e.message}`);
+    } finally {
+      setLoadingResults(false);
+    }
+  };
+
   const fetchProfile = async () => {
     try {
-      const res = await fetch("/api/profile");
+      const email = localStorage.getItem("user_email") || "";
+      const emailParam = email ? `?email=${encodeURIComponent(email)}` : "";
+      const res = await fetch(`/api/profile${emailParam}`);
       if (res.ok) {
         const data = await res.json();
         if (data && data.fullName && data.fullName !== "Default User" && data.fullName !== "No Resume Uploaded") {
@@ -102,7 +138,8 @@ export default function Home() {
             setSalaryExpectation(String(data.preferences.salaryExpectation));
           }
           addLog("Loaded existing profile from backend cache.");
-          fetchSuggestions();
+          fetchSuggestions(data.email);
+          fetchResults(data.email);
         }
       }
     } catch (e) {
@@ -135,32 +172,69 @@ export default function Home() {
         throw new Error(await res.text() || "Failed to upload and parse resume.");
       }
 
-      const parsedData: ParsedProfile = await res.json();
-      setProfile(parsedData);
-      setLocationPref(parsedData.targetLocation || "Ahmedabad");
-      setIsRemoteOpen(parsedData.isRemoteOpen ?? true);
-      if (parsedData.preferences?.employmentTypes && parsedData.preferences.employmentTypes.length > 0) {
-        setEmploymentTypes(parsedData.preferences.employmentTypes);
-      }
-      if (parsedData.preferences?.salaryExpectation !== undefined && parsedData.preferences?.salaryExpectation !== null) {
-        setSalaryExpectation(String(parsedData.preferences.salaryExpectation));
-      }
-      addLog(`Resume parsed successfully for ${parsedData.fullName}!`);
-      
-      // Auto-fetch suggestions after upload
-      await fetchSuggestions();
+      const uploadRes = await res.json();
+      const taskId = uploadRes.taskId;
+      addLog(`Resume uploaded successfully. Task ID: ${taskId}. Initiating real-time parsing status stream...`);
+
+      // Open EventSource for SSE updates
+      const eventSource = new EventSource(`/api/profile/parse-status/${taskId}`);
+
+      eventSource.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          addLog(`[Parsing progress] ${data.log}`);
+
+          if (data.status === "success") {
+            eventSource.close();
+            const parsedData: ParsedProfile = data.profile;
+            if (parsedData.email) {
+              localStorage.setItem("user_email", parsedData.email);
+            }
+            setProfile(parsedData);
+            setLocationPref(parsedData.targetLocation || "Ahmedabad");
+            setIsRemoteOpen(parsedData.isRemoteOpen ?? true);
+            if (parsedData.preferences?.employmentTypes && parsedData.preferences.employmentTypes.length > 0) {
+              setEmploymentTypes(parsedData.preferences.employmentTypes);
+            }
+            if (parsedData.preferences?.salaryExpectation !== undefined && parsedData.preferences?.salaryExpectation !== null) {
+              setSalaryExpectation(String(parsedData.preferences.salaryExpectation));
+            }
+            addLog(`Resume parsed successfully for ${parsedData.fullName}!`);
+            
+            // Auto-fetch suggestions and results after upload completion
+            await fetchSuggestions(parsedData.email);
+            fetchResults(parsedData.email);
+            setParsing(false);
+          } else if (data.status === "error") {
+            eventSource.close();
+            addLog(`Error parsing resume: ${data.errorDetails}`);
+            setParsing(false);
+          }
+        } catch (err: any) {
+          eventSource.close();
+          addLog(`Error parsing stream event: ${err.message}`);
+          setParsing(false);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        addLog("EventSource connection to parsing status stream closed or failed.");
+        setParsing(false);
+      };
     } catch (e: any) {
       addLog(`Error parsing resume: ${e.message}`);
-    } finally {
       setParsing(false);
     }
   };
 
-  const fetchSuggestions = async () => {
+  const fetchSuggestions = async (email?: string) => {
     setLoadingSuggestions(true);
     addLog("Requesting recommended job titles based on your resume stack...");
     try {
-      const res = await fetch("/api/profile/suggest-titles");
+      const activeEmail = email || profile?.email;
+      const emailParam = activeEmail ? `?email=${encodeURIComponent(activeEmail)}` : "";
+      const res = await fetch(`/api/profile/suggest-titles${emailParam}`);
       if (!res.ok) throw new Error("Could not load recommendations.");
       const data = await res.json();
       setSearchTerms(data.searchTerms || []);
@@ -253,6 +327,7 @@ export default function Home() {
               clearInterval(pollInterval);
               setWorkflowRunning(false);
               addLog("Real-time pipeline run completed.");
+              fetchResults(profile?.email);
             }
           }
         } catch (pollErr: any) {
@@ -457,7 +532,7 @@ export default function Home() {
                     </label>
                     {profile && (
                       <button
-                        onClick={fetchSuggestions}
+                        onClick={() => fetchSuggestions(profile?.email)}
                         disabled={loadingSuggestions}
                         className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 disabled:opacity-50"
                       >
@@ -710,6 +785,131 @@ export default function Home() {
 
           </div>
         </div>
+
+        {/* Results Section */}
+        <section className="mt-12 pt-12 border-t border-zinc-800/80">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                Job Recommendation Results
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1">
+                Real-time recommendations from vector similarities, rank-weighted algorithms, and customized profile matches.
+              </p>
+            </div>
+            <button
+              onClick={() => fetchResults(profile?.email)}
+              disabled={loadingResults}
+              className="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              <svg className={`w-3.5 h-3.5 ${loadingResults ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18" />
+              </svg>
+              Refresh Results
+            </button>
+          </div>
+
+          {loadingResults ? (
+            <div className="flex flex-col items-center justify-center py-20 border border-dashed border-zinc-800 rounded-2xl bg-zinc-950/20">
+              <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-3" />
+              <span className="text-sm text-zinc-500">Querying database results table...</span>
+            </div>
+          ) : results.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 border border-dashed border-zinc-800 rounded-2xl bg-zinc-950/20 text-center">
+              <svg className="w-12 h-12 text-zinc-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm text-zinc-500 font-medium">No recommendation results found in database.</span>
+              <span className="text-xs text-zinc-650 mt-1 max-w-sm">
+                Run the autonomous search pipeline above to scrape listings, score them, and populate recommendations.
+              </span>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {results.map((item) => {
+                let scoreColor = "bg-zinc-805 text-zinc-400";
+                if (item.score >= 90) {
+                  scoreColor = "bg-emerald-500/10 border-emerald-500/30 text-emerald-400";
+                } else if (item.score >= 75) {
+                  scoreColor = "bg-teal-500/10 border-teal-500/30 text-teal-400";
+                } else if (item.score >= 50) {
+                  scoreColor = "bg-yellow-500/10 border-yellow-500/30 text-yellow-400";
+                }
+
+                return (
+                  <div key={item.id} className="bg-zinc-900/30 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 flex flex-col justify-between hover:border-zinc-700 transition-colors shadow-lg group">
+                    <div>
+                      <div className="flex items-start justify-between gap-4 mb-3">
+                        <div className="min-w-0">
+                          <h3 className="text-base font-bold text-white truncate group-hover:text-emerald-400 transition-colors">
+                            {item.title}
+                          </h3>
+                          <p className="text-sm font-semibold text-zinc-400 truncate mt-0.5">
+                            {item.company}
+                          </p>
+                        </div>
+                        <div className={`shrink-0 px-3 py-1.5 rounded-xl border text-xs font-extrabold font-mono flex items-center justify-center gap-1 ${scoreColor}`}>
+                          <span>{item.score}%</span>
+                          <span className="text-[10px] opacity-70">Match</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-500 border-b border-zinc-850/50 pb-3 mb-4">
+                        <span className="flex items-center gap-1">
+                          <svg className="w-3.5 h-3.5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                          {item.location}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <svg className="w-3.5 h-3.5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                          {item.source}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <svg className="w-3.5 h-3.5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+
+                      {item.reasoning && (
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">AI Recommendation Reasoning</span>
+                          <p className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-3.5 text-xs text-zinc-350 mt-1 italic leading-relaxed">
+                            "{item.reasoning}"
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-5 pt-4 border-t border-zinc-850/50 flex items-center justify-end">
+                      {item.url && (item.url.startsWith("http://") || item.url.startsWith("https://")) ? (
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                        >
+                          Apply on Site
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      ) : (
+                        <span className="text-xs text-zinc-600 italic font-medium">No direct link available</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
