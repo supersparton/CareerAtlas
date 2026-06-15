@@ -63,9 +63,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try {
       await client.query('BEGIN');
 
-      // Enable pgvector extension
-      await client.query('CREATE EXTENSION IF NOT EXISTS vector');
-      
       // 1. Create users table
       await client.query(`
         CREATE TABLE IF NOT EXISTS users (
@@ -97,58 +94,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           skill VARCHAR(100) NOT NULL,
           PRIMARY KEY (user_id, skill)
         );
-      `);
-
-      // 4. Create user embeddings table (384 dimensions for bge-small)
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS user_embeddings (
-          user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          embedding vector(384) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      // 5. Create jobs table
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS jobs (
-          id VARCHAR(50) PRIMARY KEY,
-          title VARCHAR(255) NOT NULL,
-          company VARCHAR(255) NOT NULL,
-          url TEXT NOT NULL,
-          description TEXT NOT NULL,
-          location VARCHAR(255) NOT NULL,
-          posting_date TIMESTAMP NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      // 6. Create job requirements table
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS job_requirements (
-          job_id VARCHAR(50) PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
-          required_skills TEXT[] NOT NULL,
-          preferred_skills TEXT[] NOT NULL,
-          experience_required INTEGER NOT NULL,
-          education_requirements TEXT[] NOT NULL,
-          employment_type VARCHAR(100) NOT NULL,
-          remote_allowed BOOLEAN NOT NULL,
-          actual_location VARCHAR(255) NOT NULL
-        );
-      `);
-
-      // 7. Create job embeddings table (384 dimensions for bge-small)
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS job_embeddings (
-          job_id VARCHAR(50) PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
-          embedding vector(384) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      // 8. Create HNSW indexes for cosine distance search speedup
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS job_embeddings_vector_idx 
-        ON job_embeddings USING hnsw (embedding vector_cosine_ops);
       `);
 
       await client.query('COMMIT');

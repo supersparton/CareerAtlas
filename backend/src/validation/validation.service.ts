@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { MemoryService } from '../memory/memory.service';
 import { Job } from '../discovery/discovery.service';
+import { QdrantService } from '../vector-store/qdrant.service';
 
 @Injectable()
 export class ValidationService {
@@ -9,7 +10,8 @@ export class ValidationService {
 
   constructor(
     private readonly db: DatabaseService,
-    private readonly memoryService: MemoryService
+    private readonly memoryService: MemoryService,
+    private readonly qdrantService: QdrantService,
   ) {}
 
   /**
@@ -160,15 +162,17 @@ export class ValidationService {
       return true;
     }
     
-    // Check DB
+    // Check Qdrant vector store
     try {
-      const res = await this.db.query(
-        'SELECT 1 FROM jobs WHERE id = $1 OR (LOWER(title) = LOWER($2) AND LOWER(company) = LOWER($3) AND LOWER(location) = LOWER($4))',
-        [job.jobId, job.title, job.company, job.location]
-      );
-      return res.rows.length > 0;
+      const uuid = QdrantService.stringToUuid(job.jobId);
+      const res = await this.qdrantService.getClient().retrieve('job_embeddings', {
+        ids: [uuid],
+        with_payload: false,
+        with_vector: false,
+      });
+      return res.length > 0;
     } catch (err) {
-      this.logger.error(`[VALIDATION] DB duplicate check failed: ${err.message}`);
+      this.logger.error(`[VALIDATION] Qdrant duplicate check failed: ${err.message}`);
       return false;
     }
   }

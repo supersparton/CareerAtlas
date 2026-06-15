@@ -4,6 +4,7 @@ import { UserProfile } from '../profile/profile.service';
 import { MemoryService } from '../memory/memory.service';
 import { JobRequirements } from '../intelligence/job-intelligence.service';
 import { Job } from '../discovery/discovery.service';
+import { QdrantService } from '../vector-store/qdrant.service';
 
 export interface SkillScore {
   overlapSkills: string[];
@@ -72,6 +73,7 @@ export class MatchingService {
   constructor(
     private readonly db: DatabaseService,
     private readonly memoryService: MemoryService,
+    private readonly qdrantService: QdrantService,
   ) {}
 
   /**
@@ -280,24 +282,45 @@ export class MatchingService {
    */
   private async computeSemanticScore(userId: number, jobId: string): Promise<SemanticScore> {
     try {
-      // Cosine similarity = 1 - cosine distance
-      const queryText = `
-        SELECT (1 - (je.embedding <=> ue.embedding)) AS similarity
-        FROM job_embeddings je
-        CROSS JOIN user_embeddings ue
-        WHERE ue.user_id = $1 AND je.job_id = $2;
-      `;
-      const res = await this.db.query(queryText, [userId, jobId]);
-      if (res.rows.length === 0) {
+      // 1. Retrieve user vector from Qdrant
+      const userRes = await this.qdrantService.getClient().retrieve('user_embeddings', {
+        ids: [userId],
+        with_vector: true,
+      });
+
+      if (userRes.length === 0 || !userRes[0].vector) {
+        this.logger.warn(`[MATCHING] User embedding not found in Qdrant for user ID: ${userId}`);
         return { score: 50 }; // Default neutral fallback
       }
 
-      // Convert distance range [-1, 1] to a percentage [0, 100]
-      const sim = parseFloat(res.rows[0].similarity) || 0;
+      const userVector = userRes[0].vector as number[];
+
+      // 2. Search job_embeddings matching the specific jobId payload key
+      const searchRes = await this.qdrantService.getClient().search('job_embeddings', {
+        vector: userVector,
+        filter: {
+          must: [
+            {
+              key: 'jobId',
+              match: {
+                value: jobId,
+              },
+            },
+          ],
+        },
+        limit: 1,
+      });
+
+      if (searchRes.length === 0) {
+        return { score: 50 }; // Default neutral fallback
+      }
+
+      const sim = searchRes[0].score;
+      // Convert similarity range [-1, 1] to a percentage [0, 100]
       const pctScore = Math.max(0, Math.min(100, sim * 100));
       return { score: pctScore };
     } catch (err) {
-      this.logger.error(`[MATCHING] Failed to calculate pgvector cosine similarity: ${err.message}`);
+      this.logger.error(`[MATCHING] Failed to calculate Qdrant cosine similarity: ${err.message}`);
       return { score: 0 };
     }
   }
@@ -388,37 +411,40 @@ export class MatchingService {
   private async getIngestedJobs(): Promise<{ job: Job; reqs: JobRequirements }[]> {
     const list: { job: Job; reqs: JobRequirements }[] = [];
     try {
-      const res = await this.db.query(`
-        SELECT j.*, jr.required_skills, jr.preferred_skills, jr.experience_required, 
-               jr.education_requirements, jr.employment_type, jr.remote_allowed, jr.actual_location
-        FROM jobs j
-        JOIN job_requirements jr ON j.id = jr.job_id
-      `);
+      // Retrieve points from Qdrant scroll (limit 500 for matching pool)
+      const res = await this.qdrantService.getClient().scroll('job_embeddings', {
+        limit: 500,
+        with_payload: true,
+        with_vector: false,
+      });
 
-      for (const row of res.rows) {
+      for (const point of res.points) {
+        const payload = point.payload as any;
+        if (!payload) continue;
+
         list.push({
           job: {
-            jobId: row.id,
+            jobId: payload.jobId,
             source: 'TinyFish',
-            title: row.title,
-            company: row.company,
-            location: row.location,
-            description: row.description,
-            applyUrl: row.url,
+            title: payload.title,
+            company: payload.company,
+            location: payload.location,
+            description: payload.description,
+            applyUrl: payload.url,
           },
           reqs: {
-            requiredSkills: row.required_skills,
-            preferredSkills: row.preferred_skills,
-            experienceRequired: row.experience_required,
-            educationRequirements: row.education_requirements,
-            employmentType: row.employment_type,
-            remoteAllowed: row.remote_allowed,
-            location: row.actual_location,
+            requiredSkills: payload.requiredSkills || [],
+            preferredSkills: payload.preferredSkills || [],
+            experienceRequired: payload.experienceRequired || 0,
+            educationRequirements: payload.educationRequirements || [],
+            employmentType: payload.employmentType || 'Full-time',
+            remoteAllowed: !!payload.remoteAllowed,
+            location: payload.location || 'Remote',
           },
         });
       }
     } catch (err) {
-      this.logger.error(`[MATCHING] DB Error loading ingested jobs: ${err.message}`);
+      this.logger.error(`[MATCHING] Qdrant Error loading ingested jobs: ${err.message}`);
     }
     return list;
   }

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { QdrantService } from '../vector-store/qdrant.service';
 import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
@@ -48,6 +49,7 @@ export class ProfileService {
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
+    private readonly qdrantService: QdrantService,
   ) {
     this.model = new ChatGroq({
       apiKey: process.env.GROQ_API_KEY,
@@ -446,17 +448,26 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       this.logger.log('[PROFILE] Generating User Embedding...');
       const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
 
-      // 6. Save embedding
-      const formattedVector = `[${embedding.join(',')}]`;
-      await client.query(`
-        INSERT INTO user_embeddings (user_id, embedding)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET embedding = EXCLUDED.embedding, created_at = CURRENT_TIMESTAMP
-      `, [userId, formattedVector]);
+      // 6. Save embedding to Qdrant vector database
+      await this.qdrantService.getClient().upsert('user_embeddings', {
+        wait: true,
+        points: [
+          {
+            id: userId,
+            vector: embedding,
+            payload: {
+              fullName: profile.fullName,
+              email: profile.email,
+              experienceYears: profile.experienceYears,
+              skills: profile.skills,
+              preferredRoles: profile.preferredRoles,
+            }
+          }
+        ]
+      });
 
       await client.query('COMMIT');
-      this.logger.log(`[PROFILE] User profile and embedding successfully stored in DB for user id: ${userId}`);
+      this.logger.log(`[PROFILE] User profile successfully stored in DB and embedding stored in Qdrant for user id: ${userId}`);
       return profile;
     } catch (err) {
       await client.query('ROLLBACK');

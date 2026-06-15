@@ -3,7 +3,7 @@ import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import { Job } from '../discovery/discovery.service';
-import { ParsedProfile as UserProfile } from '../agent/profile.service';
+import { ParsedProfile as UserProfile } from '../profile/profile.service';
 import * as path from 'path';
 
 export interface JobScore {

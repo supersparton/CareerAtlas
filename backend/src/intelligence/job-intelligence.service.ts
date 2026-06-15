@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { QdrantService } from '../vector-store/qdrant.service';
 import { Job } from '../discovery/discovery.service';
 import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
@@ -24,6 +25,7 @@ export class JobIntelligenceService {
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
+    private readonly qdrantService: QdrantService,
   ) {
     this.model = new ChatGroq({
       apiKey: process.env.GROQ_API_KEY,
@@ -288,70 +290,63 @@ Do not include any conversational filler, explanation, or markdown formatting (s
 
   private async getCachedRequirements(jobId: string): Promise<JobRequirements | null> {
     try {
-      const res = await this.db.query('SELECT * FROM job_requirements WHERE job_id = $1', [jobId]);
-      if (res.rows.length === 0) return null;
+      const uuid = QdrantService.stringToUuid(jobId);
+      const res = await this.qdrantService.getClient().retrieve('job_embeddings', {
+        ids: [uuid],
+        with_payload: true,
+        with_vector: false,
+      });
 
-      const row = res.rows[0];
+      if (res.length === 0) return null;
+      const payload = res[0].payload as any;
+      if (!payload) return null;
+
       return {
-        requiredSkills: row.required_skills,
-        preferredSkills: row.preferred_skills,
-        experienceRequired: row.experience_required,
-        educationRequirements: row.education_requirements,
-        employmentType: row.employment_type,
-        remoteAllowed: row.remote_allowed,
-        location: row.actual_location,
+        requiredSkills: payload.requiredSkills || [],
+        preferredSkills: payload.preferredSkills || [],
+        experienceRequired: payload.experienceRequired || 0,
+        educationRequirements: payload.educationRequirements || [],
+        employmentType: payload.employmentType || 'Full-time',
+        remoteAllowed: !!payload.remoteAllowed,
+        location: payload.location || 'Remote',
       };
     } catch (err) {
-      this.logger.error(`[JOB-INTEL] DB error checking cached requirements: ${err.message}`);
+      this.logger.error(`[JOB-INTEL] Qdrant error checking cached requirements: ${err.message}`);
       return null;
     }
   }
 
   private async saveJobToDb(job: Job, reqs: JobRequirements, embedding: number[]) {
-    const client = await this.db.getPool().connect();
     try {
-      await client.query('BEGIN');
-
-      // 1. Insert into jobs table using resolved location
-      await client.query(`
-        INSERT INTO jobs (id, title, company, url, description, location, posting_date)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id) DO UPDATE 
-        SET title = EXCLUDED.title, company = EXCLUDED.company, description = EXCLUDED.description, location = EXCLUDED.location
-      `, [job.jobId, job.title, job.company, job.applyUrl, job.description, reqs.location, new Date()]);
-
-      // 2. Insert into job_requirements table
-      await client.query(`
-        INSERT INTO job_requirements (job_id, required_skills, preferred_skills, experience_required, education_requirements, employment_type, remote_allowed, actual_location)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (job_id) DO UPDATE 
-        SET required_skills = EXCLUDED.required_skills, preferred_skills = EXCLUDED.preferred_skills, experience_required = EXCLUDED.experience_required, education_requirements = EXCLUDED.education_requirements, employment_type = EXCLUDED.employment_type, remote_allowed = EXCLUDED.remote_allowed, actual_location = EXCLUDED.actual_location
-      `, [
-        job.jobId,
-        reqs.requiredSkills,
-        reqs.preferredSkills,
-        Math.round(reqs.experienceRequired),
-        reqs.educationRequirements,
-        reqs.employmentType,
-        reqs.remoteAllowed,
-        reqs.location
-      ]);
-
-      // 3. Insert into job_embeddings
-      const formattedVector = `[${embedding.join(',')}]`;
-      await client.query(`
-        INSERT INTO job_embeddings (job_id, embedding)
-        VALUES ($1, $2)
-        ON CONFLICT (job_id) DO UPDATE 
-        SET embedding = EXCLUDED.embedding, created_at = CURRENT_TIMESTAMP
-      `, [job.jobId, formattedVector]);
-
-      await client.query('COMMIT');
+      const uuid = QdrantService.stringToUuid(job.jobId);
+      await this.qdrantService.getClient().upsert('job_embeddings', {
+        wait: true,
+        points: [
+          {
+            id: uuid,
+            vector: embedding,
+            payload: {
+              jobId: job.jobId,
+              title: job.title,
+              company: job.company,
+              url: job.applyUrl,
+              description: job.description,
+              location: reqs.location,
+              postingDate: new Date().toISOString(),
+              requiredSkills: reqs.requiredSkills,
+              preferredSkills: reqs.preferredSkills,
+              experienceRequired: reqs.experienceRequired,
+              educationRequirements: reqs.educationRequirements,
+              employmentType: reqs.employmentType,
+              remoteAllowed: reqs.remoteAllowed,
+            }
+          }
+        ]
+      });
+      this.logger.log(`[JOB-INTEL] Job ${job.jobId} and embedding successfully stored in Qdrant.`);
     } catch (err) {
-      await client.query('ROLLBACK');
+      this.logger.error(`[JOB-INTEL] Failed to save job details to Qdrant: ${err.message}`);
       throw err;
-    } finally {
-      client.release();
     }
   }
 }
