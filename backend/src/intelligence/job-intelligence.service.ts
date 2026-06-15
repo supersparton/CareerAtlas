@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { QdrantService } from '../vector-store/qdrant.service';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { Job } from '../discovery/discovery.service';
-import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 
@@ -20,56 +20,24 @@ export interface JobRequirements {
 @Injectable()
 export class JobIntelligenceService {
   private readonly logger = new Logger(JobIntelligenceService.name);
-  private model: ChatGroq;
 
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
     private readonly qdrantService: QdrantService,
-  ) {
-    this.model = new ChatGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0,
-    });
-  }
-
-  private async invokeOllama(promptText: string): Promise<string> {
-    const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
-    const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
-    
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: promptText,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama failed with status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    return data.response;
-  }
+    private readonly llmGatewayService: LlmGatewayService,
+  ) {}
 
   private async invokeModelWithFallback(promptText: string): Promise<string> {
-    const useOllama = process.env.USE_OLLAMA === 'true';
-
-    if (useOllama) {
-      try {
-        return await this.invokeOllama(promptText);
-      } catch (err) {
-        this.logger.warn(`[JOB-INTEL: LLM] Local Ollama failed: ${err.message}. Falling back to standard API...`);
-      }
+    try {
+      return await this.llmGatewayService.invokeLLM(async (model) => {
+        const response = await model.invoke(promptText);
+        return response.content as string;
+      });
+    } catch (err) {
+      this.logger.error(`[JOB-INTEL: LLM] All LLM providers/keys failed: ${err.message}`);
+      throw err;
     }
-
-    const response = await this.model.invoke(promptText);
-    return response.content as string;
   }
 
   private cleanJsonText(text: string): string {
@@ -176,14 +144,22 @@ export class JobIntelligenceService {
   }
 
   /**
-   * Processes a job posting: Extracts metadata, generates embedding, and stores in database.
-   * If job already exists, returns cached data.
+   * Extracts job requirements and structured metadata from the description using LLM.
+   * Checks cache (Qdrant) first.
    */
-  async processJob(job: Job): Promise<JobRequirements> {
+  async extractRequirements(job: Job): Promise<JobRequirements> {
     const existingReq = await this.getCachedRequirements(job.jobId);
     if (existingReq) {
       this.logger.log(`[JOB-INTEL] Cache hit. Skipping extraction for job ID: ${job.jobId}`);
       return existingReq;
+    }
+
+    // Try fetching full description from URL first if not already enriched by ScrapingWorker
+    if (!job.description || job.description.length < 500) {
+      const fullDescription = await this.fetchFullDescription(job.applyUrl);
+      if (fullDescription) {
+        job.description = fullDescription;
+      }
     }
 
     this.logger.log(`[JOB-INTEL] Extracting structured requirements for "${job.title}" at "${job.company}"...`);
@@ -228,10 +204,21 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         return [];
       };
 
+      // Infer minimum required experience from title keywords as a fallback for short snippets
+      let inferredYears = 0;
+      const titleLower = job.title.toLowerCase();
+      if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
+        inferredYears = 8;
+      } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
+        inferredYears = 6;
+      } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
+        inferredYears = 5;
+      }
+
       const reqs: JobRequirements = {
         requiredSkills: parseArray(parsed.requiredSkills),
         preferredSkills: parseArray(parsed.preferredSkills),
-        experienceRequired: parseFloat(parsed.experienceRequired) || 0,
+        experienceRequired: Math.max(parseFloat(parsed.experienceRequired) || 0, inferredYears),
         educationRequirements: parseArray(parsed.educationRequirements),
         employmentType: String(parsed.employmentType || 'Full-time').trim(),
         remoteAllowed: typeof parsed.remoteAllowed === 'boolean' ? parsed.remoteAllowed : String(parsed.remoteAllowed).toLowerCase() === 'true',
@@ -249,23 +236,26 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         })(),
       };
 
-      // Generate job description embedding
-      const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${reqs.location}\nRequired Skills: ${reqs.requiredSkills.join(', ')}\nDescription: ${job.description}`;
-      this.logger.log(`[JOB-INTEL] Generating Job Embedding for ID: ${job.jobId}`);
-      const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
-
-      // Save to database
-      await this.saveJobToDb(job, reqs, embedding);
-
       return reqs;
     } catch (err) {
       this.logger.error(`[JOB-INTEL] Failed to extract requirements for job ${job.jobId}: ${err.message}`, err.stack);
       
+      // Infer minimum required experience from title keywords for the fallback block
+      let inferredYears = 0;
+      const titleLower = job.title.toLowerCase();
+      if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
+        inferredYears = 8;
+      } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
+        inferredYears = 6;
+      } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
+        inferredYears = 5;
+      }
+
       // Fallback defaults to prevent pipeline crash
       const fallbackReqs: JobRequirements = {
         requiredSkills: [],
         preferredSkills: [],
-        experienceRequired: 0,
+        experienceRequired: inferredYears,
         educationRequirements: [],
         employmentType: 'Full-time',
         remoteAllowed: /remote|hybrid/i.test(job.location + job.description),
@@ -276,19 +266,33 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         })(),
       };
 
-      try {
-        const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nDescription: ${job.description}`;
-        const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
-        await this.saveJobToDb(job, fallbackReqs, embedding);
-      } catch (saveErr) {
-        this.logger.error(`[JOB-INTEL] Failed to save fallback job details to DB: ${saveErr.message}`);
-      }
-
       return fallbackReqs;
     }
   }
 
-  private async getCachedRequirements(jobId: string): Promise<JobRequirements | null> {
+  /**
+   * Processes a job posting: Extracts metadata, generates embedding, and stores in database.
+   * If job already exists, returns cached data.
+   */
+  async processJob(job: Job): Promise<JobRequirements> {
+    const reqs = await this.extractRequirements(job);
+
+    // Generate job description embedding
+    try {
+      const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${reqs.location}\nRequired Skills: ${reqs.requiredSkills.join(', ')}\nDescription: ${job.description}`;
+      this.logger.log(`[JOB-INTEL] Generating Job Embedding for ID: ${job.jobId}`);
+      const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
+
+      // Save to database
+      await this.saveJobToDb(job, reqs, embedding);
+    } catch (err) {
+      this.logger.error(`[JOB-INTEL] Failed to generate/save embedding for job ${job.jobId}: ${err.message}`);
+    }
+
+    return reqs;
+  }
+
+  async getCachedRequirements(jobId: string): Promise<JobRequirements | null> {
     try {
       const uuid = QdrantService.stringToUuid(jobId);
       const res = await this.qdrantService.getClient().retrieve('job_embeddings', {
@@ -316,7 +320,7 @@ Do not include any conversational filler, explanation, or markdown formatting (s
     }
   }
 
-  private async saveJobToDb(job: Job, reqs: JobRequirements, embedding: number[]) {
+  async saveJobToDb(job: Job, reqs: JobRequirements, embedding: number[]) {
     try {
       const uuid = QdrantService.stringToUuid(job.jobId);
       await this.qdrantService.getClient().upsert('job_embeddings', {
@@ -347,6 +351,87 @@ Do not include any conversational filler, explanation, or markdown formatting (s
     } catch (err) {
       this.logger.error(`[JOB-INTEL] Failed to save job details to Qdrant: ${err.message}`);
       throw err;
+    }
+  }
+
+  private async fetchFullDescription(url: string): Promise<string | null> {
+    if (!url) return null;
+    try {
+      this.logger.log(`[JOB-INTEL] Fetching full job description page from: ${url}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en',
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        this.logger.warn(`[JOB-INTEL] Direct fetch failed with status: ${response.status} for ${url}`);
+        return null;
+      }
+
+      const html = await response.text();
+      
+      // Strip script and style tags completely
+      let cleanText = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+      cleanText = cleanText.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+      
+      // Try to target common job description elements for popular platforms to reduce noise
+      let matchedText = '';
+      
+      // Lever
+      if (url.includes('lever.co')) {
+        const leverMatch = cleanText.match(/<div class="section-wrapper"[\s\S]*?<\/div>[\s\S]*?<\/div>/i)
+                     || cleanText.match(/<div class="sectionpage page-full"[\s\S]*?<\/div>/i);
+        if (leverMatch) matchedText = leverMatch[0];
+      }
+      // Greenhouse
+      else if (url.includes('greenhouse.io')) {
+        const ghMatch = cleanText.match(/<div id="content"[\s\S]*?<\/div>/i);
+        if (ghMatch) matchedText = ghMatch[0];
+      }
+      // Ashby
+      else if (url.includes('ashbyhq.com')) {
+        const ashbyMatch = cleanText.match(/<div class="_description_[\s\S]*?<\/div>/i);
+        if (ashbyMatch) matchedText = ashbyMatch[0];
+      }
+      // LinkedIn public job details
+      else if (url.includes('linkedin.com')) {
+        const liMatch = cleanText.match(/<div class="show-more-less-html__markup[\s\S]*?<\/div>/i)
+                     || cleanText.match(/<section class="show-more-less-html"[\s\S]*?<\/section>/i)
+                     || cleanText.match(/<div class="description__text[\s\S]*?<\/div>/i);
+        if (liMatch) matchedText = liMatch[0];
+      }
+
+      if (!matchedText) {
+        // Fallback: Use body content if no specific container matches
+        const bodyMatch = cleanText.match(/<body[\s\S]*?<\/body>/i);
+        matchedText = bodyMatch ? bodyMatch[0] : cleanText;
+      }
+
+      // Strip all HTML tags
+      cleanText = matchedText.replace(/<[^>]*>/g, ' ');
+      
+      // Clean up whitespace
+      cleanText = cleanText.replace(/\s+/g, ' ').trim();
+      
+      if (cleanText.length > 200) {
+        this.logger.log(`[JOB-INTEL] Successfully fetched and parsed ${cleanText.length} characters of description text.`);
+        return cleanText;
+      }
+
+      return null;
+    } catch (err: any) {
+      this.logger.warn(`[JOB-INTEL] Failed to scrape job description: ${err.message}`);
+      return null;
     }
   }
 }

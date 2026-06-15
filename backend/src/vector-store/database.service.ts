@@ -83,8 +83,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           remote BOOLEAN NOT NULL,
           employment_types TEXT[] NOT NULL,
           salary_expectation INTEGER,
-          experience_years INTEGER NOT NULL
+          experience_years INTEGER NOT NULL,
+          education TEXT[] DEFAULT '{}',
+          projects TEXT[] DEFAULT '{}',
+          achievements TEXT[] DEFAULT '{}'
         );
+      `);
+
+      // Ensure new columns exist for existing tables
+      await client.query(`
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS education TEXT[] DEFAULT '{}';
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS projects TEXT[] DEFAULT '{}';
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS achievements TEXT[] DEFAULT '{}';
       `);
 
       // 3. Create user skills table
@@ -94,6 +104,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           skill VARCHAR(100) NOT NULL,
           PRIMARY KEY (user_id, skill)
         );
+      `);
+
+      // 4. Create results table for user-specific recommendations
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS results (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          job_id VARCHAR(255) NOT NULL,
+          company VARCHAR(255) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          location VARCHAR(255) NOT NULL,
+          source VARCHAR(100) NOT NULL,
+          url TEXT,
+          score INTEGER NOT NULL,
+          reasoning TEXT,
+          status VARCHAR(50) DEFAULT 'matched',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (user_id, job_id)
+        );
+      `);
+
+      // Ensure url column exists in case table was created previously without it
+      await client.query(`
+        ALTER TABLE results ADD COLUMN IF NOT EXISTS url TEXT;
       `);
 
       await client.query('COMMIT');

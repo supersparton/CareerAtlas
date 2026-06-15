@@ -94,11 +94,14 @@ export class MatchingService {
     this.logger.log(`[MATCHING] Loaded ${jobsWithReqs.length} total jobs from database.`);
 
     // 3. Stage 3: Apply Hard Filters & Exclude already notified/seen jobs
+    const seenJobRes = await this.db.query('SELECT job_id FROM results WHERE user_id = $1', [userId]);
+    const seenJobIds = new Set(seenJobRes.rows.map((r) => r.job_id));
+
     const filteredJobs = jobsWithReqs.filter(({ job, reqs }) => {
-      if (this.memoryService.isJobMatched(job.company, job.title, job.location, job.source)) {
+      if (seenJobIds.has(job.jobId)) {
         return false;
       }
-      return this.applyHardFilters(profile, reqs);
+      return this.applyHardFilters(profile, reqs, job.title);
     });
     this.logger.log(`[MATCHING] Hard Filter Engine: Approved ${filteredJobs.length} / ${jobsWithReqs.length} jobs.`);
     
@@ -176,9 +179,22 @@ export class MatchingService {
   /**
    * Stage 3: Hard Filter Engine (Mandatory constraints check)
    */
-  private applyHardFilters(profile: UserProfile, reqs: JobRequirements): boolean {
+  private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string): boolean {
+    // Determine inferred minimum experience based on seniority keywords in job title
+    let inferredExperienceRequired = 0;
+    const titleLower = jobTitle.toLowerCase();
+    if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
+      inferredExperienceRequired = 8;
+    } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
+      inferredExperienceRequired = 6;
+    } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
+      inferredExperienceRequired = 5;
+    }
+
+    const effectiveExperienceRequired = Math.max(reqs.experienceRequired, inferredExperienceRequired);
+
     // A. Experience constraint: Candidate years must be >= Required years
-    if (profile.experienceYears < reqs.experienceRequired) {
+    if (profile.experienceYears < effectiveExperienceRequired) {
       return false;
     }
 
@@ -282,9 +298,10 @@ export class MatchingService {
    */
   private async computeSemanticScore(userId: number, jobId: string): Promise<SemanticScore> {
     try {
-      // 1. Retrieve user vector from Qdrant
+      // 1. Retrieve user vector from Qdrant using the correct UUID format
+      const userUuid = QdrantService.stringToUuid(userId.toString());
       const userRes = await this.qdrantService.getClient().retrieve('user_embeddings', {
-        ids: [userId],
+        ids: [userUuid],
         with_vector: true,
       });
 

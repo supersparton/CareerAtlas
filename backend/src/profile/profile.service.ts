@@ -2,10 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { QdrantService } from '../vector-store/qdrant.service';
-import { ChatGroq } from '@langchain/groq';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import * as _pdf from 'pdf-parse';
+import { Subject, Observable } from 'rxjs';
 
 export interface UserProfile {
   id?: number;
@@ -44,18 +45,32 @@ export interface ParsedProfile {
 @Injectable()
 export class ProfileService {
   private readonly logger = new Logger(ProfileService.name);
-  private model: ChatGroq;
+  private readonly taskEvents = new Subject<{ taskId: string; status: 'running' | 'success' | 'error'; log: string; errorDetails?: string; profile?: UserProfile }>();
 
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
     private readonly qdrantService: QdrantService,
-  ) {
-    this.model = new ChatGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0,
-    });
+    private readonly llmGatewayService: LlmGatewayService,
+  ) {}
+
+  emitTaskEvent(taskId: string | undefined, status: 'running' | 'success' | 'error', log: string, errorDetails?: string, profile?: UserProfile) {
+    if (taskId) {
+      this.taskEvents.next({ taskId, status, log, errorDetails, profile });
+    }
+  }
+
+  getTaskEventStream(taskId: string): Observable<{ taskId: string; status: 'running' | 'success' | 'error'; log: string; errorDetails?: string; profile?: UserProfile }> {
+    return this.taskEvents.asObservable();
+  }
+
+  async runBackgroundParse(taskId: string, pdfBuffer: Buffer): Promise<void> {
+    try {
+      const profile = await this.parseResumePdf(pdfBuffer, taskId);
+      this.emitTaskEvent(taskId, 'success', 'Profile parsing and vector indexing completed!', undefined, profile);
+    } catch (err) {
+      this.emitTaskEvent(taskId, 'error', `Parsing failed: ${err.message}`, err.message);
+    }
   }
 
   getProfile(): ParsedProfile | null {
@@ -97,47 +112,14 @@ export class ProfileService {
   }
 
 
-  private async invokeOllama(promptText: string): Promise<string> {
-    const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
-    const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
-    this.logger.log(`[PROFILE: LLM] Attempting local Ollama call with model "${ollamaModel}"...`);
-
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: promptText,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama failed with status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    return data.response;
-  }
-
   private async invokeModelWithFallback(promptText: string): Promise<string> {
-    const useOllama = process.env.USE_OLLAMA === 'true';
-
-    if (useOllama) {
-      try {
-        return await this.invokeOllama(promptText);
-      } catch (err) {
-        this.logger.warn(`[PROFILE: LLM] Local Ollama failed: ${err.message}. Falling back to standard API...`);
-      }
-    }
-
     try {
-      this.logger.log('[PROFILE: LLM] Invoking Groq model (Secondary)...');
-      const response = await this.model.invoke(promptText);
-      return response.content as string;
+      return await this.llmGatewayService.invokeLLM(async (model) => {
+        const response = await model.invoke(promptText);
+        return response.content as string;
+      });
     } catch (err) {
-      this.logger.error(`[PROFILE: LLM] Groq API exception: ${err.message}.`);
+      this.logger.error(`[PROFILE: LLM] All LLM providers/keys failed: ${err.message}`);
       throw err;
     }
   }
@@ -253,7 +235,8 @@ export class ProfileService {
     return cleaned;
   }
 
-  async parseResumePdf(pdfBuffer: Buffer): Promise<UserProfile> {
+  async parseResumePdf(pdfBuffer: Buffer, taskId?: string): Promise<UserProfile> {
+    this.emitTaskEvent(taskId, 'running', 'Extracting character streams from PDF resume...');
     this.logger.log('[PROFILE] Extracting text from PDF resume...');
     let pdfText = '';
     
@@ -308,6 +291,7 @@ export class ProfileService {
       throw new Error('PDF file appears to have no readable text content.');
     }
 
+    this.emitTaskEvent(taskId, 'running', 'Running AI LLM parsing agent on resume content...');
     this.logger.log('[PROFILE] Structuring resume content via LLM...');
 
     const prompt = `You are an elite talent acquisition AI. Parse the following raw text from a candidate's resume PDF and extract it into a structured format.
@@ -382,14 +366,15 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       };
 
       // Persist profile to the database
-      return await this.saveProfileToDb(profile);
+      this.emitTaskEvent(taskId, 'running', 'Saving structured user profile and preferences to database...');
+      return await this.saveProfileToDb(profile, taskId);
     } catch (e) {
       this.logger.error(`[PROFILE] Structuring failed: ${e.message}`, e.stack);
       throw new Error(`Structuring failed: ${e.message}`);
     }
   }
 
-  async saveProfileToDb(profile: UserProfile): Promise<UserProfile> {
+  async saveProfileToDb(profile: UserProfile, taskId?: string): Promise<UserProfile> {
     this.logger.log(`[PROFILE] Saving profile to database for: ${profile.fullName} (${profile.email})...`);
     const client = await this.db.getPool().connect();
     
@@ -414,8 +399,8 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
 
       // 3. Insert into user_preferences
       await client.query(`
-        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years, education, projects, achievements)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `, [
         userId,
         profile.preferredRoles,
@@ -423,7 +408,10 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         profile.preferences.remote,
         profile.preferences.employmentTypes,
         profile.preferences.salaryExpectation || null,
-        Math.round(profile.experienceYears)
+        Math.round(profile.experienceYears),
+        profile.education || [],
+        profile.projects || [],
+        profile.achievements || []
       ]);
 
       // 4. Insert skills
@@ -436,19 +424,22 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       }
 
       // 5. Generate User Embedding
-      // As per requirements: "User embedding should contain: Projects, Experience, Achievements, Education"
+      // As per requirements: "User embedding should contain: Projects, Experience, Achievements, Education, and Skills"
       const textToEmbed = [
         `Target Roles: ${profile.preferredRoles.join(', ')}`,
+        `Core Skills & Keywords: ${profile.skills.join(', ')}`,
         `Education: ${profile.education.join('. ')}`,
         `Projects: ${profile.projects.join('. ')}`,
         `Achievements: ${profile.achievements.join('. ')}`,
         `Experience Years: ${profile.experienceYears}`
       ].join('\n');
 
+      this.emitTaskEvent(taskId, 'running', 'Generating 384-dimensional vector embedding for candidate profile...');
       this.logger.log('[PROFILE] Generating User Embedding...');
       const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
 
       // 6. Save embedding to Qdrant vector database
+      this.emitTaskEvent(taskId, 'running', 'Indexing user embedding into Qdrant vector database...');
       await this.qdrantService.getClient().upsert('user_embeddings', {
         wait: true,
         points: [
@@ -494,6 +485,9 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         employment_types: ['Full-time'],
         salary_expectation: null,
         experience_years: 0,
+        education: [],
+        projects: [],
+        achievements: [],
       };
 
       const skills = skillsRes.rows.map(r => r.skill);
@@ -505,9 +499,9 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         phone: user.phone,
         skills,
         experienceYears: pref.experience_years,
-        education: [], // Populated from raw profile context if needed
-        projects: [],
-        achievements: [],
+        education: pref.education || [],
+        projects: pref.projects || [],
+        achievements: pref.achievements || [],
         preferredRoles: pref.preferred_roles,
         preferences: {
           locations: pref.locations,

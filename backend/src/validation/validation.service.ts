@@ -79,6 +79,74 @@ export class ValidationService {
     return validatedJobs;
   }
 
+  async isJobInUserResults(userId: number, jobId: string): Promise<boolean> {
+    try {
+      const res = await this.db.query(
+        'SELECT id FROM results WHERE user_id = $1 AND job_id = $2',
+        [userId, jobId]
+      );
+      return res.rows.length > 0;
+    } catch (err) {
+      this.logger.error(`[VALIDATION] DB check for user results duplicate failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  async isJobInQdrant(jobId: string): Promise<boolean> {
+    try {
+      const uuid = QdrantService.stringToUuid(jobId);
+      const res = await this.qdrantService.getClient().retrieve('job_embeddings', {
+        ids: [uuid],
+        with_payload: false,
+        with_vector: false,
+      });
+      return res.length > 0;
+    } catch (err) {
+      this.logger.error(`[VALIDATION] Qdrant check for job embedding existence failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  async validateSingleJob(job: Job, searchTerm: string, profile: any, userId: number): Promise<{ valid: boolean; reason?: string; bypassed?: boolean }> {
+    try {
+      // 1. Check if the user has already seen/notified this job
+      const isAlreadyUserResult = await this.isJobInUserResults(userId, job.jobId);
+      if (isAlreadyUserResult) {
+        return { valid: false, reason: 'Duplicate (Already matched to this user)' };
+      }
+
+      // 2. Check Expiry
+      const isExpired = this.isExpired(job);
+      if (isExpired) {
+        return { valid: false, reason: 'Expired' };
+      }
+
+      // 3. Check Broken URL
+      const isUrlActive = await this.isUrlActive(job.applyUrl);
+      if (!isUrlActive) {
+        return { valid: false, reason: 'Broken Link' };
+      }
+
+      // 4. Check Title Relevance
+      if (searchTerm && !this.isTitleRelevant(job.title, searchTerm)) {
+        return { valid: false, reason: `Irrelevant title for search: "${searchTerm}"` };
+      }
+
+      // 5. Check Location Relevance
+      if (profile && !this.isLocationRelevant(job.location, profile)) {
+        return { valid: false, reason: `Location "${job.location}" doesn't match candidate preferences` };
+      }
+
+      // 6. Check if job already has vector embeddings in Qdrant
+      const inQdrant = await this.isJobInQdrant(job.jobId);
+
+      return { valid: true, bypassed: inQdrant };
+    } catch (err) {
+      this.logger.error(`[VALIDATION] Exception validating job "${job.title}": ${err.message}`);
+      return { valid: false, reason: `Error: ${err.message}` };
+    }
+  }
+
   private isTitleRelevant(jobTitle: string, searchTerm: string): boolean {
     const titleLower = jobTitle.toLowerCase();
     const searchLower = searchTerm.toLowerCase();
@@ -189,6 +257,18 @@ export class ValidationService {
   private async isUrlActive(url: string): Promise<boolean> {
     if (!url || !url.startsWith('http')) {
       return false;
+    }
+
+    // Specially bypass URL active check for major job platforms that aggressively block simple HTTP requests
+    const urlLower = url.toLowerCase();
+    if (
+      urlLower.includes('linkedin.com') ||
+      urlLower.includes('wellfound.com') ||
+      urlLower.includes('ycombinator.com') ||
+      urlLower.includes('glassdoor') ||
+      urlLower.includes('indeed.com')
+    ) {
+      return true;
     }
 
     try {
