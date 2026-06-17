@@ -4,7 +4,6 @@ import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { QdrantService } from '../vector-store/qdrant.service';
 import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { PromptTemplate } from '@langchain/core/prompts';
-import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import * as _pdf from 'pdf-parse';
 import { Subject, Observable } from 'rxjs';
 
@@ -87,25 +86,6 @@ export class ProfileService {
     return null;
   }
 
-  private async getProfileForSuggestions(): Promise<UserProfile | null> {
-    const raw = this.getProfile();
-    if (!raw) return null;
-    return {
-      fullName: raw.fullName,
-      email: raw.email,
-      skills: raw.coreSkills || [],
-      experienceYears: raw.experienceLevel?.toLowerCase().includes('senior') ? 6 : 2,
-      education: [],
-      projects: [],
-      achievements: [],
-      preferredRoles: raw.targetRole ? [raw.targetRole] : [],
-      preferences: {
-        locations: raw.targetLocation ? [raw.targetLocation] : [],
-        remote: raw.isRemoteOpen ?? true,
-        employmentTypes: ['Full-time'],
-      }
-    };
-  }
 
   async invokeModel(promptText: string): Promise<string> {
     return this.invokeModelWithFallback(promptText);
@@ -527,13 +507,13 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
     }
   }
 
-  async suggestJobTitles(profile?: UserProfile): Promise<string[]> {
-    const activeProfile = profile || await this.getProfileForSuggestions();
-    if (!activeProfile) {
+  async suggestJobTitles(profile: UserProfile): Promise<string[]> {
+    if (!profile || !profile.email) {
       this.logger.warn('[PROFILE] Cannot suggest job titles: No active profile found.');
       return [];
     }
 
+    const activeProfile = profile;
     this.logger.log(`[PROFILE] Generating title suggestions for role: "${activeProfile.preferredRoles.join(', ')}"...`);
 
     const prompt = PromptTemplate.fromTemplate(`

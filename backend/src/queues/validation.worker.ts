@@ -32,7 +32,6 @@ export class ValidationWorker extends WorkerHost {
     private readonly profileService: ProfileService,
     private readonly coordinator: PipelineCoordinatorService,
     @InjectQueue('job-scraping') private readonly scrapingQueue: Queue,
-    @InjectQueue('job-intelligence') private readonly intelligenceQueue: Queue,
     @InjectQueue('job-matching') private readonly matchingQueue: Queue,
   ) {
     super();

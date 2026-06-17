@@ -30,7 +30,6 @@ export class ScrapingWorker extends WorkerHost {
     private readonly camoufoxScraperService: CamoufoxScraperService,
     private readonly coordinator: PipelineCoordinatorService,
     @InjectQueue('job-intelligence') private readonly intelligenceQueue: Queue,
-    @InjectQueue('job-matching') private readonly matchingQueue: Queue,
   ) {
     super();
   }

@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { UserProfile } from '../profile/profile.service';
-import { MemoryService } from '../memory/memory.service';
 import { JobRequirements } from '../intelligence/job-intelligence.service';
 import { Job } from '../discovery/discovery.service';
 import { QdrantService } from '../vector-store/qdrant.service';
@@ -72,7 +71,6 @@ export class MatchingService {
 
   constructor(
     private readonly db: DatabaseService,
-    private readonly memoryService: MemoryService,
     private readonly qdrantService: QdrantService,
   ) {}
 

@@ -1,17 +1,7 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { AtsPortalsAgent } from '../discovery/ats-portals.agent';
-import { StartupBoardsAgent } from '../discovery/startup-boards.agent';
-import { IndiaFocusedAgent } from '../discovery/india-focused.agent';
-import { LinkedInAgent } from '../discovery/linkedin.agent';
-import { MemoryService } from '../memory/memory.service';
-import { NotifierService } from '../notifier/notifier.service';
-import { Job } from '../discovery/discovery.service';
 import { ProfileService, UserProfile } from '../profile/profile.service';
-import { ValidationService } from '../validation/validation.service';
-import { JobIntelligenceService } from '../intelligence/job-intelligence.service';
-import { MatchingService, RankedJob } from '../matching/matching.service';
 import { DatabaseService } from '../vector-store/database.service';
 import { PipelineCoordinatorService } from '../queues/pipeline-coordinator.service';
 
@@ -21,16 +11,7 @@ export class AgentService implements OnApplicationBootstrap {
   private activeUserId = 1; // Default user ID for single-user environment
 
   constructor(
-    private readonly atsPortalsAgent: AtsPortalsAgent,
-    private readonly startupBoardsAgent: StartupBoardsAgent,
-    private readonly indiaFocusedAgent: IndiaFocusedAgent,
-    private readonly linkedinAgent: LinkedInAgent,
-    private readonly memoryService: MemoryService,
-    private readonly notifierService: NotifierService,
     private readonly profileService: ProfileService,
-    private readonly validationService: ValidationService,
-    private readonly jobIntelligenceService: JobIntelligenceService,
-    private readonly matchingService: MatchingService,
     private readonly db: DatabaseService,
     private readonly coordinator: PipelineCoordinatorService,
     @InjectQueue('job-discovery') private readonly discoveryQueue: Queue,
