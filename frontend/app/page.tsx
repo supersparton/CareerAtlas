@@ -120,6 +120,31 @@ export default function Home() {
     }
   };
 
+  const handleClearHistory = async () => {
+    if (!confirm("Are you sure you want to clear your matched jobs history and reset all caches? This cannot be undone.")) {
+      return;
+    }
+    setLoadingResults(true);
+    try {
+      const res = await fetch("/api/agent/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: profile?.email }),
+      });
+      if (res.ok) {
+        addLog("Successfully cleared job match history and scraper cache.");
+        setResults([]);
+      } else {
+        const errMsg = await res.text();
+        throw new Error(errMsg);
+      }
+    } catch (e: any) {
+      addLog(`Error clearing history: ${e.message}`);
+    } finally {
+      setLoadingResults(false);
+    }
+  };
+
   const fetchProfile = async () => {
     try {
       const email = localStorage.getItem("user_email") || "";
@@ -249,10 +274,10 @@ export default function Home() {
   const handleAddTerm = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanTerm = newTermInput.trim();
-    if (cleanTerm && !searchTerms.includes(cleanTerm)) {
-      setSearchTerms((prev) => [...prev, cleanTerm]);
+    if (cleanTerm) {
+      setSearchTerms([cleanTerm]);
       setNewTermInput("");
-      addLog(`Added title: "${cleanTerm}"`);
+      addLog(`Set target search title to: "${cleanTerm}"`);
     }
   };
 
@@ -528,7 +553,7 @@ export default function Home() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-                      Target Job Search Titles
+                      Target Job Search Title
                     </label>
                     {profile && (
                       <button
@@ -546,7 +571,7 @@ export default function Home() {
 
                   <div className="flex flex-wrap gap-2 p-3 min-h-[48px] bg-zinc-950 rounded-xl border border-zinc-800 mb-3">
                     {searchTerms.length === 0 ? (
-                      <span className="text-sm text-zinc-600 self-center">No search titles added yet. Parse resume or add manually.</span>
+                      <span className="text-sm text-zinc-600 self-center">No search title set. Parse resume or enter manually below.</span>
                     ) : (
                       searchTerms.map((term) => (
                         <span
@@ -572,14 +597,14 @@ export default function Home() {
                       type="text"
                       value={newTermInput}
                       onChange={(e) => setNewTermInput(e.target.value)}
-                      placeholder="e.g. Node.js Backend Developer"
+                      placeholder="Enter new job title (will overwrite current)"
                       className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
                     />
                     <button
                       type="submit"
                       className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-sm px-4 rounded-xl transition-all"
                     >
-                      Add Title
+                      Set Title
                     </button>
                   </form>
                 </div>
@@ -798,16 +823,28 @@ export default function Home() {
                 Real-time recommendations from vector similarities, rank-weighted algorithms, and customized profile matches.
               </p>
             </div>
-            <button
-              onClick={() => fetchResults(profile?.email)}
-              disabled={loadingResults}
-              className="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50"
-            >
-              <svg className={`w-3.5 h-3.5 ${loadingResults ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18" />
-              </svg>
-              Refresh Results
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleClearHistory}
+                disabled={loadingResults || workflowRunning}
+                className="text-xs bg-red-950/20 hover:bg-red-900/30 text-red-400 border border-red-900/50 hover:border-red-800 px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Clear History & Cache
+              </button>
+              <button
+                onClick={() => fetchResults(profile?.email)}
+                disabled={loadingResults}
+                className="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                <svg className={`w-3.5 h-3.5 ${loadingResults ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18" />
+                </svg>
+                Refresh Results
+              </button>
+            </div>
           </div>
 
           {loadingResults ? (

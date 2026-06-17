@@ -99,9 +99,10 @@ export class ProfileController {
   async suggestTitles(@Query('email') email?: string): Promise<{ searchTerms: string[] }> {
     const profile = await this.getProfile(email);
     if (!profile.email) {
-      return { searchTerms: ['Backend Engineer', 'Software Developer'] };
+      return { searchTerms: ['Software Engineer'] };
     }
     const searchTerms = await this.profileService.suggestJobTitles(profile);
-    return { searchTerms };
+    const limitedTerms = searchTerms.slice(0, 1);
+    return { searchTerms: limitedTerms.length > 0 ? limitedTerms : ['Software Engineer'] };
   }
 }

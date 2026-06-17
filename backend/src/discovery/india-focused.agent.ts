@@ -13,6 +13,15 @@ export class IndiaFocusedAgent {
     return `after:${dateStr}`;
   }
 
+  private expandLocationForQuery(location: string): string {
+    const cleaned = location.replace(/[()"]/g, '').trim();
+    const lower = cleaned.toLowerCase();
+    if (lower === 'bangalore' || lower === 'bengaluru') {
+      return '("Bangalore" OR "Bengaluru")';
+    }
+    return `"${cleaned}"`;
+  }
+
   async findJobs(searchTerm: string, locationPref: string, page: number): Promise<Job[]> {
     this.logger.log(`[SCRAPER: INDIA_FOCUSED] Searching for '${searchTerm}' in '${locationPref}' (Page ${page})...`);
     
@@ -32,9 +41,10 @@ export class IndiaFocusedAgent {
     const jobs: Job[] = [];
     try {
       const dateFilter = this.getDateFilter();
+      const expandedLoc = this.expandLocationForQuery(locationPref);
       
       // Try with date filter first
-      let query = `(site:instahyre.com/job OR site:cutshort.io/job OR site:naukri.com/job-listings) ${finalSearchTerm} ${locationPref} ${dateFilter}`;
+      let query = `(site:instahyre.com/job OR site:cutshort.io/job OR site:naukri.com/job-listings) ${finalSearchTerm} ${expandedLoc} ${dateFilter}`;
       let searchUrl = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}&page=${page - 1}`;
       
       this.logger.log(`[SCRAPER: INDIA_FOCUSED] Querying TinyFish API (Attempt 1: With Date Filter) with query: "${query}"`);
@@ -53,7 +63,7 @@ export class IndiaFocusedAgent {
       // Fallback: if 0 results found, retry without date filter to capture undated/older active job posts
       if (results.length === 0 && page === 1) {
         this.logger.warn(`[SCRAPER: INDIA_FOCUSED] 0 results with date filter. Retrying without date filter for broader search...`);
-        query = `(site:instahyre.com/job OR site:cutshort.io/job OR site:naukri.com/job-listings) ${finalSearchTerm} ${locationPref}`;
+        query = `(site:instahyre.com/job OR site:cutshort.io/job OR site:naukri.com/job-listings) ${finalSearchTerm} ${expandedLoc}`;
         searchUrl = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}&page=${page - 1}`;
         
         response = await fetch(searchUrl, {

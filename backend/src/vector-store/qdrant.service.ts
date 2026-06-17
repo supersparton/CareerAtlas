@@ -55,6 +55,18 @@ export class QdrantService implements OnModuleInit {
           vectors: { size: 384, distance: 'Cosine' }
         });
       }
+
+      // Ensure keyword payload index exists for jobId on job_embeddings
+      try {
+        await this.client.createPayloadIndex('job_embeddings', {
+          field_name: 'jobId',
+          field_schema: 'keyword',
+        });
+        this.logger.log('[QDRANT] Verified/created payload index for "jobId" on "job_embeddings".');
+      } catch (indexErr) {
+        this.logger.debug(`[QDRANT] Payload index on jobId already exists or failed: ${indexErr.message}`);
+      }
+
       this.logger.log('[QDRANT] Collections initialized successfully.');
     } catch (err) {
       this.logger.error(`[QDRANT] Failed to initialize collections: ${err.message}`);

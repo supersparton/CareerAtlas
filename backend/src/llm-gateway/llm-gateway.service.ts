@@ -12,6 +12,7 @@ export interface LLMProvider {
   activeRequests: number;
   cooldownUntil: number; // timestamp
   priority: number; // 1 = High, 3 = Low
+  totalRequestsRouted: number;
 }
 
 @Injectable()
@@ -52,6 +53,7 @@ export class LlmGatewayService implements OnModuleInit {
         activeRequests: 0,
         cooldownUntil: 0,
         priority: 3,
+        totalRequestsRouted: 0,
       });
       this.logger.log(`[LLM-GATEWAY] Registered Local Ollama at ${ollamaUrl}`);
     }
@@ -89,6 +91,7 @@ export class LlmGatewayService implements OnModuleInit {
       activeRequests: 0,
       cooldownUntil: 0,
       priority,
+      totalRequestsRouted: 0,
     });
     this.logger.log(`[LLM-GATEWAY] Added provider: ${name} (ID: ${id})`);
   }
@@ -136,7 +139,8 @@ export class LlmGatewayService implements OnModuleInit {
       }
 
       provider.activeRequests++;
-      this.logger.log(`[LLM-GATEWAY] Routing request to: ${provider.name} (Active Load: ${provider.activeRequests})`);
+      provider.totalRequestsRouted++;
+      this.logger.log(`[LLM-GATEWAY] Routing request to: ${provider.name} (Active Load: ${provider.activeRequests}, Total Routed: ${provider.totalRequestsRouted})`);
 
       try {
         const result = await promptRunner(provider.client);
@@ -174,12 +178,15 @@ export class LlmGatewayService implements OnModuleInit {
       return null;
     }
 
-    // Sort by: 1. Priority (lower value first) -> 2. Load (fewer active requests first)
+    // Sort by: 1. Priority (lower value first) -> 2. Load (fewer active requests first) -> 3. Total requests routed (fewer first)
     return healthy.sort((a, b) => {
       if (a.priority !== b.priority) {
         return a.priority - b.priority;
       }
-      return a.activeRequests - b.activeRequests;
+      if (a.activeRequests !== b.activeRequests) {
+        return a.activeRequests - b.activeRequests;
+      }
+      return (a.totalRequestsRouted || 0) - (b.totalRequestsRouted || 0);
     })[0];
   }
 

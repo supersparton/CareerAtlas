@@ -13,6 +13,15 @@ export class AtsPortalsAgent {
     return `after:${dateStr}`;
   }
 
+  private expandLocationForQuery(location: string): string {
+    const cleaned = location.replace(/[()"]/g, '').trim();
+    const lower = cleaned.toLowerCase();
+    if (lower === 'bangalore' || lower === 'bengaluru') {
+      return '("Bangalore" OR "Bengaluru")';
+    }
+    return `"${cleaned}"`;
+  }
+
   async findJobs(searchTerm: string, locationPref: string, page: number): Promise<Job[]> {
     this.logger.log(`[SCRAPER: ATS_PORTALS] Searching for '${searchTerm}' in '${locationPref}' (Page ${page})...`);
     
@@ -24,7 +33,8 @@ export class AtsPortalsAgent {
     const jobs: Job[] = [];
     try {
       const dateFilter = this.getDateFilter();
-      const query = `(site:boards.greenhouse.io OR site:lever.co OR site:ashbyhq.com OR site:workable.com) "${searchTerm}" ${locationPref} ${dateFilter}`;
+      const expandedLoc = this.expandLocationForQuery(locationPref);
+      const query = `(site:boards.greenhouse.io OR site:lever.co OR site:ashbyhq.com OR site:workable.com) "${searchTerm}" ${expandedLoc} ${dateFilter}`;
       const searchUrl = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}&page=${page - 1}`;
       
       this.logger.log(`[SCRAPER: ATS_PORTALS] Querying TinyFish API with query: "${query}"`);
