@@ -142,8 +142,8 @@ export class MatchingWorker extends WorkerHost {
         // Insert into results table, check for duplicate conflicts dynamically
         try {
           const insertRes = await this.db.query(`
-            INSERT INTO results (user_id, job_id, company, title, location, source, url, score, reasoning, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'notified')
+            INSERT INTO results (user_id, job_id, company, title, location, source, url, score, reasoning, status, run_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'notified', $10)
             ON CONFLICT (user_id, job_id) DO NOTHING
             RETURNING id
           `, [
@@ -155,7 +155,8 @@ export class MatchingWorker extends WorkerHost {
             job.source,
             job.applyUrl || '',
             finalScore,
-            aiReasoning
+            aiReasoning,
+            runId
           ]);
 
           if (insertRes.rowCount === 0) {

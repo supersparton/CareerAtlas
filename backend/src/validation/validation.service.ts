@@ -144,8 +144,16 @@
       // If candidate has specific physical location preferences
       if (locations.length > 0) {
         const hasMatch = locations.some(loc => {
-          const locLower = loc.toLowerCase();
-          return jobLocLower.includes(locLower) || locLower.includes(jobLocLower);
+          const locLower = loc.toLowerCase().trim();
+          if (jobLocLower.includes(locLower) || locLower.includes(jobLocLower)) {
+            return true;
+          }
+          // Bangalore <-> Bengaluru synonym resolution
+          const isBangalore = (s: string) => s.includes('bangalore') || s.includes('bengaluru');
+          if (isBangalore(jobLocLower) && isBangalore(locLower)) {
+            return true;
+          }
+          return false;
         });
         if (hasMatch) {
           return true;

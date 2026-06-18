@@ -178,9 +178,10 @@ export class MatchingService {
    * Stage 3: Hard Filter Engine (Mandatory constraints check)
    */
   private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string): boolean {
+    const titleLower = jobTitle.toLowerCase();
+    
     // Determine inferred minimum experience based on seniority keywords in job title
     let inferredExperienceRequired = 0;
-    const titleLower = jobTitle.toLowerCase();
     if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
       inferredExperienceRequired = 8;
     } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
@@ -191,60 +192,123 @@ export class MatchingService {
 
     const effectiveExperienceRequired = Math.max(reqs.experienceRequired, inferredExperienceRequired);
 
-    // A. Experience constraint: Candidate years must be >= Required years
-    if (profile.experienceYears < effectiveExperienceRequired) {
+    // 1. Determine Candidate Seniority Level based on actual parsed experience
+    const candidateYears = profile.experienceYears;
+    let candidateSeniority = 'Junior';
+    if (candidateYears >= 8) {
+      candidateSeniority = 'Lead/Principal';
+    } else if (candidateYears >= 5) {
+      candidateSeniority = 'Senior';
+    } else if (candidateYears >= 2) {
+      candidateSeniority = 'Mid';
+    }
+
+    // 2. Determine Job Seniority Level based on title keywords and required experience
+    let jobSeniority = 'Junior';
+    if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower) || reqs.experienceRequired >= 8) {
+      jobSeniority = 'Lead/Principal';
+    } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower) || reqs.experienceRequired >= 6) {
+      jobSeniority = 'Lead';
+    } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower) || reqs.experienceRequired >= 5) {
+      jobSeniority = 'Senior';
+    } else if (reqs.experienceRequired >= 2) {
+      jobSeniority = 'Mid';
+    }
+
+    // 3. Seniority Exclusions: Prevent senior recommendations reaching junior candidates
+    if (candidateSeniority === 'Junior') {
+      if (jobSeniority === 'Senior' || jobSeniority === 'Lead' || jobSeniority === 'Lead/Principal') {
+        return false;
+      }
+    }
+    if (candidateSeniority === 'Mid') {
+      if (jobSeniority === 'Lead/Principal') {
+        return false;
+      }
+    }
+
+    // 4. Experience constraint check with a minor grace period for senior candidates
+    const allowedDeficit = (effectiveExperienceRequired >= 5 && candidateYears >= 3) ? 1.5 : 0;
+    if (candidateYears + allowedDeficit < effectiveExperienceRequired) {
       return false;
     }
 
-    // B. Remote preference:
-    // If job does not allow remote and candidate ONLY wants remote
+    // 5. Remote & Location constraint checks
     const candidateLocations = (profile.preferences.locations || [])
-      .map(loc => loc.trim())
+      .map(loc => loc.trim().toLowerCase())
       .filter(Boolean);
+    const isCandidateOpenToRemote = !!profile.preferences.remote;
+    
+    const jobLocLower = (reqs.location || '').toLowerCase();
+    const isJobRemote = !!reqs.remoteAllowed || jobLocLower.includes('remote');
 
-    const candidateWantsOnlyRemote = candidateLocations.length === 0 && profile.preferences.remote;
-    if (candidateWantsOnlyRemote && !reqs.remoteAllowed) {
+    // If candidate has disabled remote completely, reject any remote jobs
+    if (!isCandidateOpenToRemote && isJobRemote) {
       return false;
     }
 
-    // C. Location constraint:
-    // Job location must be remote OR in candidate location list
-    const isJobRemote = reqs.remoteAllowed || reqs.location.toLowerCase() === 'remote';
-    const isCandidateOpenToRemote = profile.preferences.remote;
-
-    // If job is remote-only (no physical location, e.g. location is 'remote') and candidate is NOT open to remote:
-    if (reqs.location.toLowerCase() === 'remote' && !isCandidateOpenToRemote) {
-      return false;
-    }
-
+    // If candidate has specified preferred physical locations
     if (candidateLocations.length > 0) {
-      // Candidate has specific physical location preferences.
-      // If the job is remote and candidate is open to remote, it's a valid match.
-      // Otherwise, the job MUST have a physical location that matches one of the candidate's preferences.
-      if (isJobRemote && isCandidateOpenToRemote) {
-        // Valid remote match
-      } else {
-        const jobLocLower = reqs.location.toLowerCase();
-        const hasLocMatch = candidateLocations.some(loc => 
-          jobLocLower.includes(loc.toLowerCase()) || loc.toLowerCase().includes(jobLocLower)
-        );
-        if (!hasLocMatch) {
-          return false;
+      const hasPhysicalMatch = candidateLocations.some(prefLoc => {
+        if (jobLocLower.includes(prefLoc) || prefLoc.includes(jobLocLower)) {
+          return true;
         }
-      }
-    } else {
-      // Candidate has no specific physical location preferences (i.e. open to any physical location).
-      // If they are NOT open to remote, and the job is remote-only, reject it.
-      if (!isCandidateOpenToRemote && isJobRemote && reqs.location.toLowerCase() === 'remote') {
+        // Bangalore <-> Bengaluru synonym resolution
+        const isBangalore = (s: string) => s.includes('bangalore') || s.includes('bengaluru');
+        if (isBangalore(jobLocLower) && isBangalore(prefLoc)) {
+          return true;
+        }
         return false;
+      });
+
+      if (hasPhysicalMatch) {
+        // Direct physical match is always allowed
+        return true;
       }
-      // If they ONLY want remote (remote: true, locations: []), and the job is not remote:
-      if (isCandidateOpenToRemote && candidateLocations.length === 0 && !isJobRemote) {
+
+      // If no direct physical match, check if we can match via remote
+      if (isJobRemote && isCandidateOpenToRemote) {
+        // Candidate and job both allow remote, but check for country/province conflicts
+        const isCandidateInIndia = candidateLocations.some(loc => 
+          loc.includes('india') || loc.includes('bangalore') || loc.includes('bengaluru') || loc.includes('ahmedabad') || loc.includes('noida') || loc.includes('delhi') || loc.includes('mumbai') || loc.includes('pune')
+        );
+        const isCandidateInCanada = candidateLocations.some(loc => 
+          loc.includes('canada') || loc.includes('ontario') || loc.includes('toronto') || loc.includes('vancouver') || loc.includes('bc') || loc.includes('alberta')
+        );
+        const isCandidateInUS = candidateLocations.some(loc => 
+          loc.includes('usa') || loc.includes('united states') || loc.includes('california') || loc.includes('new york') || loc.includes('texas') || loc.includes('sf') || loc.includes('chicago')
+        );
+
+        if (isCandidateInIndia) {
+          // Reject if job explicitly targets US, Canada, Europe, Latam, etc.
+          if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('latam')) {
+            return false;
+          }
+        } else if (isCandidateInCanada) {
+          // Reject if job specifies US, India, UK, etc. Also reject out-of-province remote roles (e.g. Vancouver/BC if user preferred Ontario)
+          if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('vancouver') || jobLocLower.includes('bc') || jobLocLower.includes('alberta')) {
+            return false;
+          }
+        } else if (isCandidateInUS) {
+          // Reject if job specifies India, Canada, UK, Europe, etc.
+          if (jobLocLower.includes('india') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
+            return false;
+          }
+        }
+        
+        return true;
+      }
+
+      // No physical match and remote is not available/valid
+      return false;
+    } else {
+      // Candidate has no physical location preferences (open to any location)
+      if (!isCandidateOpenToRemote && isJobRemote) {
         return false;
       }
     }
 
-    // D. Employment Type constraint:
+    // 6. Employment Type constraint check
     if (profile.preferences.employmentTypes && profile.preferences.employmentTypes.length > 0) {
       const jobEmpLower = reqs.employmentType.toLowerCase();
       const hasEmpTypeMatch = profile.preferences.employmentTypes.some(type => 

@@ -75,4 +75,11 @@ export class AgentController {
       searchTerms,
     };
   }
+
+  @Post('agent/clear')
+  @HttpCode(HttpStatus.OK)
+  async clearHistory(@Body('email') email?: string) {
+    await this.agentService.clearHistory(email);
+    return { message: 'History and cache successfully cleared.' };
+  }
 }

@@ -51,8 +51,11 @@ export class StartupBoardsAgent {
       const dateFilter = this.getDateFilter();
       
       let finalLocation = locationPref;
-      if (!locationPref.toLowerCase().includes('india') && !locationPref.toLowerCase().includes('remote')) {
-        finalLocation = `(${locationPref} OR "India" OR "Remote")`;
+      const cleanedLoc = locationPref.replace(/[()"]/g, '').trim().toLowerCase();
+      if (cleanedLoc === 'bangalore' || cleanedLoc === 'bengaluru') {
+        finalLocation = '("Bangalore" OR "Bengaluru" OR "India" OR "Remote")';
+      } else if (!cleanedLoc.includes('india') && !cleanedLoc.includes('remote')) {
+        finalLocation = `("${cleanedLoc}" OR "India" OR "Remote")`;
       }
 
       const query = `(site:ycombinator.com/jobs OR site:wellfound.com/jobs) "${searchTerm}" ${finalLocation} ${dateFilter}`;

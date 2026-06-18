@@ -21,6 +21,41 @@ export class CamoufoxScraperService {
       // Wait a moment for dynamic SPAs to hydrate
       await page.waitForTimeout(2000);
 
+      // Check for authwall redirects or login checks
+      const finalUrl = page.url().toLowerCase();
+      if (finalUrl.includes('linkedin.com/authwall') || finalUrl.includes('login') || finalUrl.includes('checkpoint')) {
+        this.logger.warn(`[CAMOUFOX] Blocked/Redirected to login/authwall page: ${finalUrl}`);
+        return null;
+      }
+
+      // 1. Try to extract from application/ld+json script tags first (highly robust for job postings)
+      let jsonLdDesc = '';
+      try {
+        const jsonLdScripts = await page.$$('script[type="application/ld+json"]');
+        for (const script of jsonLdScripts) {
+          const content = await script.innerText().catch(() => '');
+          if (content && content.includes('"description"')) {
+            const data = JSON.parse(content.trim());
+            // Schema.org JobPosting format
+            if (data.description || (data['@type'] === 'JobPosting' && data.description)) {
+              const rawHtml = data.description || '';
+              // Remove HTML tags since we want plain text description
+              jsonLdDesc = rawHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (jsonLdDesc.length > 200) {
+                this.logger.log(`[CAMOUFOX] Successfully extracted ${jsonLdDesc.length} characters from JSON-LD schema.`);
+                break;
+              }
+            }
+          }
+        }
+      } catch (jsonLdErr) {
+        this.logger.warn(`[CAMOUFOX] Failed to parse JSON-LD schema: ${jsonLdErr.message}`);
+      }
+
+      if (jsonLdDesc && jsonLdDesc.length > 200) {
+        return jsonLdDesc;
+      }
+
       // Handle common job platforms specific behaviors (like clicking "Show More" buttons)
       const urlLower = url.toLowerCase();
       if (urlLower.includes('linkedin.com')) {

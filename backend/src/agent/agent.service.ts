@@ -4,6 +4,8 @@ import { Queue } from 'bullmq';
 import { ProfileService, UserProfile } from '../profile/profile.service';
 import { DatabaseService } from '../vector-store/database.service';
 import { PipelineCoordinatorService } from '../queues/pipeline-coordinator.service';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class AgentService implements OnApplicationBootstrap {
@@ -130,6 +132,9 @@ export class AgentService implements OnApplicationBootstrap {
           this.logger.log(`[ORCHESTRATOR] SQL upsert fallback for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}`);
           this.coordinator.addLog(runId, `Runtime preferences fallback synchronized for User ID ${resolvedUserId}.`);
         }
+
+        // Update the latest run ID in user preferences
+        await this.db.query('UPDATE user_preferences SET latest_run_id = $1 WHERE user_id = $2', [runId, resolvedUserId]);
         this.coordinator.updateStep(runId, 'step-1', 'success');
       }
     } catch (err) {
@@ -174,18 +179,51 @@ export class AgentService implements OnApplicationBootstrap {
         }
       }
 
+      const prefRes = await this.db.query('SELECT latest_run_id FROM user_preferences WHERE user_id = $1', [resolvedUserId]);
+      const latestRunId = prefRes.rows[0]?.latest_run_id;
+
+      if (!latestRunId) {
+        return [];
+      }
+
       const resultsRes = await this.db.query(`
         SELECT id, job_id as "jobId", company, title, location, source, url, score, reasoning, status, created_at as "createdAt"
         FROM results
-        WHERE user_id = $1
+        WHERE user_id = $1 AND run_id = $2
         ORDER BY score DESC, created_at DESC
         LIMIT 100
-      `, [resolvedUserId]);
+      `, [resolvedUserId, latestRunId]);
 
       return resultsRes.rows;
     } catch (err) {
       this.logger.error(`[ORCHESTRATOR] Failed to retrieve workflow results from DB: ${err.message}`);
       return [];
+    }
+  }
+
+  async clearHistory(email?: string) {
+    try {
+      let resolvedUserId = this.activeUserId;
+      if (email) {
+        const userRes = await this.db.query('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
+        if (userRes.rows.length > 0) {
+          resolvedUserId = userRes.rows[0].id;
+        }
+      }
+
+      // 1. Clear database results for the user
+      await this.db.query('DELETE FROM results WHERE user_id = $1', [resolvedUserId]);
+      this.logger.log(`[ORCHESTRATOR] Cleared results table history for User ID ${resolvedUserId}`);
+
+      // 2. Reset JSON memory files to empty array
+      const processedFilePath = path.join(process.cwd(), '..', 'processed_jobs.json');
+      const matchedFilePath = path.join(process.cwd(), '..', 'seen_jobs.json');
+      fs.writeFileSync(processedFilePath, JSON.stringify([]), 'utf-8');
+      fs.writeFileSync(matchedFilePath, JSON.stringify([]), 'utf-8');
+      this.logger.log('[ORCHESTRATOR] Reset processed_jobs.json and seen_jobs.json caches.');
+    } catch (err) {
+      this.logger.error(`[ORCHESTRATOR] Failed to clear history: ${err.message}`);
+      throw err;
     }
   }
 }

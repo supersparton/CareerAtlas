@@ -30,6 +30,7 @@ export class ScrapingWorker extends WorkerHost {
     private readonly camoufoxScraperService: CamoufoxScraperService,
     private readonly coordinator: PipelineCoordinatorService,
     @InjectQueue('job-intelligence') private readonly intelligenceQueue: Queue,
+    @InjectQueue('job-matching') private readonly matchingQueue: Queue,
   ) {
     super();
   }
@@ -41,15 +42,30 @@ export class ScrapingWorker extends WorkerHost {
       this.coordinator.updateStep(runId, 'step-4', 'running');
       this.coordinator.addLog(runId, `Deep-scraping full details for "${job.title}" at "${job.company}" using anti-detect browser...`);
 
+      let scrapedSuccessful = false;
       if (job.applyUrl) {
         const fullDesc = await this.camoufoxScraperService.scrapeUrl(job.applyUrl);
         if (fullDesc && fullDesc.length > 200) {
           job.description = fullDesc;
+          scrapedSuccessful = true;
           this.logger.log(`[SCRAPING-WORKER] Successfully enriched job description for "${job.title}"`);
           this.coordinator.addLog(runId, `Enriched job description for "${job.title}" (${fullDesc.length} chars).`);
-        } else {
-          this.logger.warn(`[SCRAPING-WORKER] Could not get full description for "${job.title}". Using fallback snippet.`);
         }
+      }
+
+      const hasValidDescription = scrapedSuccessful || (job.description && job.description.length > 200);
+
+      if (!hasValidDescription) {
+        this.logger.warn(`[SCRAPING-WORKER] Discarding job "${job.title}" at "${job.company}" - Description scraping failed and no fallback description is available.`);
+        this.coordinator.addLog(runId, `Discarded "${job.title}" at "${job.company}" - failed to scrape description.`);
+
+        // Decrement remaining jobs counter
+        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        if (isBatchComplete) {
+          this.logger.log(`[SCRAPING-WORKER] Batch complete after discarding invalid job. Triggering matching...`);
+          await this.matchingQueue.add('evaluate', discoveryPayload);
+        }
+        return { success: false, reason: 'Failed to retrieve job description' };
       }
 
       // Forward to Job Intelligence Queue
@@ -63,12 +79,20 @@ export class ScrapingWorker extends WorkerHost {
     } catch (err) {
       this.logger.error(`[SCRAPING-WORKER] Error in scraping job: ${err.message}`);
       
-      // Fallback: forward to Job Intelligence Queue anyway so pipeline doesn't break
-      await this.intelligenceQueue.add('parse-job', {
-        runId,
-        discoveryPayload,
-        job,
-      });
+      // Fallback: Check if we still have a valid description before forwarding to prevent pipeline freeze
+      const hasValidDescription = job.description && job.description.length > 200;
+      if (hasValidDescription) {
+        await this.intelligenceQueue.add('parse-job', {
+          runId,
+          discoveryPayload,
+          job,
+        });
+      } else {
+        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        if (isBatchComplete) {
+          await this.matchingQueue.add('evaluate', discoveryPayload);
+        }
+      }
       
       return { success: false, error: err.message };
     }

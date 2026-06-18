@@ -388,7 +388,7 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         profile.preferences.remote,
         profile.preferences.employmentTypes,
         profile.preferences.salaryExpectation || null,
-        Math.round(profile.experienceYears),
+        parseFloat(Number(profile.experienceYears || 0).toFixed(1)),
         profile.education || [],
         profile.projects || [],
         profile.achievements || []
@@ -424,7 +424,7 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         wait: true,
         points: [
           {
-            id: userId,
+            id: QdrantService.stringToUuid(userId.toString()),
             vector: embedding,
             payload: {
               fullName: profile.fullName,
@@ -517,9 +517,9 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
     this.logger.log(`[PROFILE] Generating title suggestions for role: "${activeProfile.preferredRoles.join(', ')}"...`);
 
     const prompt = PromptTemplate.fromTemplate(`
-      You are an elite career advisor. Based on the candidate's preferences below, suggest 4 to 6 specific, standard, industry-common job title search terms to query job boards.
-      Focus on terms that match their skills and preferred roles(if found any from the profile). E.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", "Software Engineer".
-      Do NOT suggest rare, highly-specialized, or niche titles (such as "Agentic AI Developer", "Generative AI Engineer", "LLM Specialist") unless the candidate has extensive professional experience in those specific areas.
+      You are an elite career advisor. Based on the candidate's preferences below, suggest exactly 1 single, most relevant, specific, standard, industry-common job title search term to query job boards.
+      Focus on the single best term that matches their skills and preferred roles (e.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", or "Software Engineer").
+      Do NOT suggest rare, highly-specialized, or niche titles unless the candidate has extensive professional experience in those specific areas.
       Do NOT suggest project names, specific technologies that are not job titles, or candidate achievements as search terms. Every suggestion MUST be a standard, widely-recognized job title.
       
       Candidate Profile:
@@ -527,7 +527,7 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       - Skills: {skills}
       - Experience Years: {experienceYears}
       
-      Respond ONLY with a JSON array of strings containing the job titles.
+      Respond ONLY with a JSON array of strings containing exactly 1 suggested job title (e.g. ["Software Engineer"]).
       Do not include any conversational filler, markdown code blocks, or schema definitions. Just return the valid JSON array of strings.
     `);
 
