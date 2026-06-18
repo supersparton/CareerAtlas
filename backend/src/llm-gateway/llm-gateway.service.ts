@@ -7,7 +7,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 export interface LLMProvider {
   id: string; // Unique identifier (e.g., 'groq-key-1')
   name: string; // Readable name
-  type: 'groq' | 'gemini' | 'ollama';
+  type: 'groq' | 'ollama';
   client: any;
   activeRequests: number;
   cooldownUntil: number; // timestamp
@@ -34,13 +34,7 @@ export class LlmGatewayService implements OnModuleInit {
       this.addProvider(`groq-key-${index + 1}`, `Groq Cloud Key #${index + 1}`, 'groq', key, 1);
     });
 
-    // 2. Load Gemini Keys
-    const geminiKeys = this.parseKeys(process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY);
-    geminiKeys.forEach((key, index) => {
-      this.addProvider(`gemini-key-${index + 1}`, `Gemini Cloud Key #${index + 1}`, 'gemini', key, 2);
-    });
-
-    // 3. Load Local Ollama Fallback
+    // 2. Load Local Ollama Fallback
     if (process.env.USE_OLLAMA === 'true') {
       const ollamaUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
       const ollamaModel = process.env.OLLAMA_MODEL || 'llama3.2';
@@ -60,7 +54,7 @@ export class LlmGatewayService implements OnModuleInit {
   /**
    * Dynamically adds a new LLM provider/key to the active pool at runtime.
    */
-  addProvider(id: string, name: string, type: 'groq' | 'gemini', apiKey: string, priority = 1) {
+  addProvider(id: string, name: string, type: 'groq', apiKey: string, priority = 1) {
     if (!apiKey) return;
     
     // Ensure we remove any existing provider with the same ID
@@ -73,14 +67,7 @@ export class LlmGatewayService implements OnModuleInit {
         model: 'llama-3.3-70b-versatile',
         temperature: 0,
       });
-    } else {
-      client = new ChatGoogleGenerativeAI({
-        apiKey,
-        modelName: 'gemini-1.5-flash',
-        temperature: 0,
-      });
     }
-
     this.providers.push({
       id,
       name,
