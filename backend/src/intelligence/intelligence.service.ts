@@ -4,7 +4,6 @@ import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { Job } from '../discovery/discovery.service';
 import { ParsedProfile as UserProfile } from '../profile/profile.service';
-import * as path from 'path';
 
 export interface JobScore {
   isFakeOrSpam: boolean;
@@ -74,7 +73,7 @@ export class IntelligenceService {
     });
 
     const formatInstructions = parser.getFormatInstructions();
-    const activeLoc = activeSearchLocation || userProfile.targetLocation || 'Remote';
+    const activeLoc = activeSearchLocation || 'Remote';
 
     const prompt = PromptTemplate.fromTemplate(`
       You are an elite career agent. Evaluate this job posting against the user's profile and current search parameters.

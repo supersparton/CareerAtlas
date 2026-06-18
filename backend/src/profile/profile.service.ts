@@ -4,7 +4,7 @@ import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { QdrantService } from '../vector-store/qdrant.service';
 import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { PromptTemplate } from '@langchain/core/prompts';
-import * as _pdf from 'pdf-parse';
+import pdfParse from 'pdf-parse';
 import { Subject, Observable } from 'rxjs';
 
 export interface UserProfile {
@@ -30,15 +30,11 @@ export interface ParsedProfile {
   fullName: string;
   email: string;
   phone: string;
+  education: string[];
   targetRole: string;
   coreSkills: string[];
   experienceLevel: string;
   preferences: string;
-  targetLocation: string;
-  isRemoteOpen: boolean;
-  experience: any[];
-  projects: any[];
-  education?: any[];
 }
 
 @Injectable()
@@ -221,7 +217,7 @@ export class ProfileService {
     let pdfText = '';
     
     try {
-      const _pdfModule = _pdf as any;
+      const _pdfModule = pdfParse as any;
       
       // 1. Try modern pdf-parse v2 PDFParse class syntax
       if (_pdfModule && _pdfModule.PDFParse) {
@@ -289,14 +285,10 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   "education": ["B.Tech in Computer Science, IIT Bombay, 2022"],
   "projects": ["Built autonomous recommendation engine using pgvector"],
   "achievements": ["Ranked 1st in national level hackathon"],
-  "preferredRoles": ["Software Engineer", "Backend Developer"],
-  "preferredLocations": [],
-  "remote": true,
-  "employmentTypes": ["Full-time"],
-  "salaryExpectation": null
+  "preferredRoles": ["Software Engineer", "Backend Developer"]
 }
 
-If any preference (such as preferredLocations or salaryExpectation or preferredRoles) is not explicitly mentioned in the resume text, you MUST return them as [] or null as shown above.Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.ALSO DO NOT ADD PREFFERED ROLES IF NOT EXPLICITLY MENTIONED IN THE RESUME.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
+Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
 
     try {
       const responseText = await this.invokeModelWithFallback(prompt);
@@ -336,12 +328,11 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         education: parseArray(parsedResult.education),
         projects: parseArray(parsedResult.projects),
         achievements: parseArray(parsedResult.achievements),
-        preferredRoles: parseArray(parsedResult.preferredRoles),
+        preferredRoles: [],
         preferences: {
-          locations: parseArray(parsedResult.preferredLocations),
-          remote: typeof parsedResult.remote === 'boolean' ? parsedResult.remote : String(parsedResult.remote).toLowerCase() === 'true',
-          employmentTypes: parseArray(parsedResult.employmentTypes).length > 0 ? parseArray(parsedResult.employmentTypes) : ['Full-time'],
-          salaryExpectation: parsedResult.salaryExpectation ? parseInt(String(parsedResult.salaryExpectation), 10) : undefined,
+          locations: [],
+          remote: true,
+          employmentTypes: ['Full-time'],
         },
       };
 

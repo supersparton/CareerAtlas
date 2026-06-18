@@ -143,6 +143,59 @@ export class JobIntelligenceService {
     return cleaned;
   }
 
+  static inferExperienceFromText(title: string, description: string): number {
+    const titleLower = title.toLowerCase();
+    const textToScan = (title + ' ' + description).toLowerCase();
+
+    // 1. Principal / Architect / VP / Director / IC5 / IC6 / L7 / L8
+    if (
+      /\b(principal|architect|director|vp|head|vice president|ic5|ic6|l7|l8)\b/i.test(titleLower) ||
+      /\b(career level - ic5|career level - ic6|level 7|level 8)\b/i.test(textToScan)
+    ) {
+      return 8;
+    }
+    
+    // 2. Lead / Staff / Manager / IC4 / L6
+    if (
+      /\b(lead|manager|staff|engineering lead|tech lead|ic4|l6)\b/i.test(titleLower) ||
+      /\b(career level - ic4|level 6)\b/i.test(textToScan)
+    ) {
+      return 6;
+    }
+    
+    // 3. Senior / SDE 3 / SDE III / IC3 / L5 / Developer 3
+    if (
+      /\b(senior|sr\b|sr\.|\biii\b|sde 3|sde iii|sde-3|sde-iii|developer 3|ic3|l5)\b/i.test(titleLower) ||
+      /\b(career level - ic3|level 5)\b/i.test(textToScan)
+    ) {
+      return 5;
+    }
+    
+    // 4. Mid-Level / SDE 2 / SDE II / IC2 / L4 / Developer 2
+    if (
+      /\b(mid|intermediate|sde 2|sde ii|sde-2|sde-ii|developer 2|ic2|l4)\b/i.test(titleLower) ||
+      /\b(career level - ic2|level 4)\b/i.test(textToScan)
+    ) {
+      return 2;
+    }
+    
+    // 5. Fresher / Entry-Level / Intern / SDE 1 / SDE I / IC1 / L3 / Developer 1
+    if (
+      /\b(intern|internship|fresher|entry level|associate|graduate|trainee|sde 1|sde i|sde-1|sde-i|developer 1|ic1|l3)\b/i.test(titleLower) ||
+      /\b(career level - ic1|level 3)\b/i.test(textToScan)
+    ) {
+      return 0;
+    }
+
+    // Default: scan for explicit years of experience mentioned
+    const yearsMatch = textToScan.match(/\b(\d+)\s*\+?\s*years?\s+(?:of\s+)?experience\b/i);
+    if (yearsMatch) {
+      return parseInt(yearsMatch[1], 10);
+    }
+
+    return 0;
+  }
+
   /**
    * Extracts job requirements and structured metadata from the description using LLM.
    * Checks cache (Qdrant) first.
@@ -204,16 +257,8 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         return [];
       };
 
-      // Infer minimum required experience from title keywords as a fallback for short snippets
-      let inferredYears = 0;
-      const titleLower = job.title.toLowerCase();
-      if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
-        inferredYears = 8;
-      } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
-        inferredYears = 6;
-      } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
-        inferredYears = 5;
-      }
+      // Infer required experience from title/description conventions
+      const inferredYears = JobIntelligenceService.inferExperienceFromText(job.title, job.description);
 
       const reqs: JobRequirements = {
         requiredSkills: parseArray(parsed.requiredSkills),
@@ -240,16 +285,8 @@ Do not include any conversational filler, explanation, or markdown formatting (s
     } catch (err) {
       this.logger.error(`[JOB-INTEL] Failed to extract requirements for job ${job.jobId}: ${err.message}`, err.stack);
       
-      // Infer minimum required experience from title keywords for the fallback block
-      let inferredYears = 0;
-      const titleLower = job.title.toLowerCase();
-      if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
-        inferredYears = 8;
-      } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
-        inferredYears = 6;
-      } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
-        inferredYears = 5;
-      }
+      // Infer required experience for the fallback block
+      const inferredYears = JobIntelligenceService.inferExperienceFromText(job.title, job.description);
 
       // Fallback defaults to prevent pipeline crash
       const fallbackReqs: JobRequirements = {

@@ -78,20 +78,80 @@ export class MatchingService {
    * Main Orchestrator for Job Recommendation matching pipeline.
    */
   async matchAndRankJobs(userId: number, limit = 10): Promise<RankedJob[]> {
-    this.logger.log(`[MATCHING] Running recommendation matching for user ID: ${userId}...`);
+    this.logger.log(`[MATCHING] Running semantic recommendation matching for user ID: ${userId}...`);
     
-    // 1. Fetch User Profile
+    // 1. Fetch User Profile from database
     const profile = await this.getUserProfile(userId);
     if (!profile) {
       this.logger.error(`[MATCHING] User profile for ID ${userId} not found.`);
       return [];
     }
 
-    // 2. Fetch all ingested jobs and their structured requirements
-    const jobsWithReqs = await this.getIngestedJobs();
-    this.logger.log(`[MATCHING] Loaded ${jobsWithReqs.length} total jobs from database.`);
+    // 2. Retrieve user vector from Qdrant
+    let userVector: number[] | null = null;
+    try {
+      const userUuid = QdrantService.stringToUuid(userId.toString());
+      const userRes = await this.qdrantService.getClient().retrieve('user_embeddings', {
+        ids: [userUuid],
+        with_vector: true,
+      });
+      if (userRes.length > 0 && userRes[0].vector) {
+        userVector = userRes[0].vector as number[];
+      }
+    } catch (vectorErr) {
+      this.logger.error(`[MATCHING] Error loading user vector from Qdrant: ${vectorErr.message}`);
+    }
 
-    // 3. Stage 3: Apply Hard Filters & Exclude already notified/seen jobs
+    if (!userVector) {
+      this.logger.error(`[MATCHING] Cannot run semantic search: User vector embedding not found for user ID: ${userId}`);
+      return [];
+    }
+
+    // 3. Search job_embeddings in Qdrant semantically
+    const jobsWithReqs: { job: Job; reqs: JobRequirements; similarity: number }[] = [];
+    try {
+      this.logger.log(`[MATCHING] Querying Qdrant semantically using user vector...`);
+      const searchRes = await this.qdrantService.getClient().search('job_embeddings', {
+        vector: userVector,
+        limit: 150, // Fetch top 150 semantically relevant jobs
+        with_payload: true,
+        with_vector: false,
+      });
+
+      for (const point of searchRes) {
+        const payload = point.payload as any;
+        if (!payload) continue;
+
+        jobsWithReqs.push({
+          job: {
+            jobId: payload.jobId,
+            source: 'TinyFish',
+            title: payload.title,
+            company: payload.company,
+            location: payload.location,
+            description: payload.description,
+            applyUrl: payload.url,
+          },
+          reqs: {
+            requiredSkills: payload.requiredSkills || [],
+            preferredSkills: payload.preferredSkills || [],
+            experienceRequired: payload.experienceRequired || 0,
+            educationRequirements: payload.educationRequirements || [],
+            employmentType: payload.employmentType || 'Full-time',
+            remoteAllowed: !!payload.remoteAllowed,
+            location: payload.location || 'Remote',
+          },
+          similarity: point.score,
+        });
+      }
+    } catch (qdrantErr) {
+      this.logger.error(`[MATCHING] Qdrant search failed: ${qdrantErr.message}`);
+      return [];
+    }
+
+    this.logger.log(`[MATCHING] Loaded ${jobsWithReqs.length} semantically similar jobs from Qdrant.`);
+
+    // 4. Apply Hard Filters & Exclude already notified/seen jobs
     const seenJobRes = await this.db.query('SELECT job_id FROM results WHERE user_id = $1', [userId]);
     const seenJobIds = new Set(seenJobRes.rows.map((r) => r.job_id));
 
@@ -99,148 +159,126 @@ export class MatchingService {
       if (seenJobIds.has(job.jobId)) {
         return false;
       }
-      return this.applyHardFilters(profile, reqs, job.title);
+      return this.applyHardFilters(profile, reqs, job.title, job.description || '');
     });
     this.logger.log(`[MATCHING] Hard Filter Engine: Approved ${filteredJobs.length} / ${jobsWithReqs.length} jobs.`);
     
     if (filteredJobs.length === 0) return [];
 
-    // 4. Batch Score Jobs
+    // 5. Pack results (using similarity score as the rank indicator)
     const rankedJobs: RankedJob[] = [];
-    
-    for (const { job, reqs } of filteredJobs) {
+    for (const { job, reqs, similarity } of filteredJobs) {
       try {
-        // Stage 4: Skill Match
-        const skillResult = this.computeSkillScore(profile.skills, reqs.requiredSkills);
-
-        // Stage 6: Semantic Match (pgvector Cosine Similarity)
-        const semanticResult = await this.computeSemanticScore(userId, job.jobId);
-
-        // Stage 7: Experience Match
-        const experienceResult = this.computeExperienceScore(profile.experienceYears, reqs.experienceRequired);
-
-        // Stage 8: Education Match
-        const educationResult = this.computeEducationScore(profile.education, reqs.educationRequirements);
-
-        // Location Match Boost: If physical location matches one of candidate's preferred cities
-        let locationBoost = 0;
-        let isLocalMatch = false;
-        if (profile.preferences.locations && profile.preferences.locations.length > 0) {
-          const jobLocLower = reqs.location.toLowerCase();
-          isLocalMatch = profile.preferences.locations.some(loc => 
-            jobLocLower.includes(loc.toLowerCase()) || loc.toLowerCase().includes(jobLocLower)
-          );
-          if (isLocalMatch) {
-            locationBoost = 15; // +15 boost to prioritize local opportunities
-          }
-        }
-
-        // Stage 9: Weighted Ranking Engine
-        // Formula: 50% Skill + 30% Semantic + 15% Experience + 5% Education + locationBoost
-        const baseScore = Math.round(
-          (skillResult.score * 0.50) +
-          (semanticResult.score * 0.30) +
-          (experienceResult.score * 0.15) +
-          (educationResult.score * 0.05)
-        );
-        const finalScore = Math.min(100, baseScore + locationBoost);
-
-        // Build explaining reasoning
-        const reasoning = `Matches ${skillResult.overlapSkills.length} core skills (${skillResult.score}% match). ` +
-          `Semantic match is ${Math.round(semanticResult.score)}%. ` +
-          `Experience requirement: ${reqs.experienceRequired} years vs Candidate: ${profile.experienceYears} years.` +
-          (isLocalMatch ? ` Local match boost (+15) applied.` : '');
+        const finalScore = Math.round(Math.max(0, Math.min(100, similarity * 100)));
 
         rankedJobs.push({
           job,
           finalScore,
-          skillScore: skillResult.score,
-          semanticScore: semanticResult.score,
-          experienceScore: experienceResult.score,
-          educationScore: educationResult.score,
-          reasoning,
+          skillScore: 100,
+          semanticScore: finalScore,
+          experienceScore: 100,
+          educationScore: 100,
+          reasoning: `Matched role "${job.title}" at ${job.company} with ${finalScore}% semantic similarity.`,
         });
       } catch (err) {
-        this.logger.error(`[MATCHING] Error matching job ${job.jobId}: ${err.message}`);
+        this.logger.error(`[MATCHING] Error packing job ${job.jobId}: ${err.message}`);
       }
     }
 
-    // Filter by threshold (minimum matching score of 50)
-    const qualifyingJobs = rankedJobs.filter(rj => rj.finalScore >= 50);
-    this.logger.log(`[MATCHING] Ranking Engine: ${qualifyingJobs.length} / ${rankedJobs.length} jobs met the threshold requirements (score >= 50).`);
-
     // Sort descending
-    const sorted = qualifyingJobs.sort((a, b) => b.finalScore - a.finalScore);
+    const sorted = rankedJobs.sort((a, b) => b.finalScore - a.finalScore);
     return sorted.slice(0, limit);
   }
 
   /**
    * Stage 3: Hard Filter Engine (Mandatory constraints check)
    */
-  private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string): boolean {
+  private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string, jobDescription: string): boolean {
     const titleLower = jobTitle.toLowerCase();
+    const descLower = jobDescription.toLowerCase();
     
-    // Determine inferred minimum experience based on seniority keywords in job title
-    let inferredExperienceRequired = 0;
-    if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower)) {
-      inferredExperienceRequired = 8;
-    } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower)) {
-      inferredExperienceRequired = 6;
-    } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower)) {
-      inferredExperienceRequired = 5;
+    // 1. Role / Search Term Filter
+    if (profile.preferredRoles && profile.preferredRoles.length > 0) {
+      const isTitleMatch = profile.preferredRoles.some(role => {
+        const roleLower = role.toLowerCase().trim();
+        return titleLower.includes(roleLower) || roleLower.includes(titleLower);
+      });
+      if (!isTitleMatch) {
+        return false;
+      }
     }
 
-    const effectiveExperienceRequired = Math.max(reqs.experienceRequired, inferredExperienceRequired);
+    // 2. Seniority & Experience Filter
+    let minYearsRequired = reqs.experienceRequired || 0;
+    let maxYearsRequired = 100;
+    
+    const textToScan = titleLower + ' ' + descLower;
 
-    // 1. Determine Candidate Seniority Level based on actual parsed experience
+    // Principal / Architect / VP / Director / IC5 / IC6 / L7 / L8
+    if (
+      /\b(principal|architect|director|vp|head|vice president|ic5|ic6|l7|l8)\b/i.test(titleLower) ||
+      /\b(career level - ic5|career level - ic6|level 7|level 8)\b/i.test(textToScan)
+    ) {
+      minYearsRequired = Math.max(minYearsRequired, 8);
+    }
+    // Lead / Staff / Manager / IC4 / L6
+    else if (
+      /\b(lead|manager|staff|engineering lead|tech lead|ic4|l6)\b/i.test(titleLower) ||
+      /\b(career level - ic4|level 6)\b/i.test(textToScan)
+    ) {
+      minYearsRequired = Math.max(minYearsRequired, 6);
+    }
+    // Senior / SDE 3 / SDE III / IC3 / L5 / Developer 3
+    else if (
+      /\b(senior|sr\b|sr\.|\biii\b|sde 3|sde iii|sde-3|sde-iii|developer 3|ic3|l5)\b/i.test(titleLower) ||
+      /\b(career level - ic3|level 5)\b/i.test(textToScan)
+    ) {
+      minYearsRequired = Math.max(minYearsRequired, 5);
+    }
+    // Mid-Level / SDE 2 / SDE II / IC2 / L4 / Developer 2
+    else if (
+      /\b(mid|intermediate|sde 2|sde ii|sde-2|sde-ii|developer 2|ic2|l4)\b/i.test(titleLower) ||
+      /\b(career level - ic2|level 4)\b/i.test(textToScan)
+    ) {
+      minYearsRequired = Math.max(minYearsRequired, 2);
+      maxYearsRequired = 5;
+    }
+    // Fresher / Entry-Level / Intern / SDE 1 / SDE I / IC1 / L3 / Developer 1
+    else if (
+      /\b(intern|internship|fresher|entry level|associate|graduate|trainee|sde 1|sde i|sde-1|sde-i|developer 1|ic1|l3)\b/i.test(titleLower) ||
+      /\b(career level - ic1|level 3)\b/i.test(textToScan)
+    ) {
+      minYearsRequired = 0;
+      maxYearsRequired = 2;
+    }
+
+    // Explicit years match
+    const yearsMatch = textToScan.match(/\b(\d+)\s*\+?\s*years?\s+(?:of\s+)?experience\b/i);
+    if (yearsMatch) {
+      const explicitYears = parseInt(yearsMatch[1], 10);
+      minYearsRequired = Math.max(minYearsRequired, explicitYears);
+    }
+
     const candidateYears = profile.experienceYears;
-    let candidateSeniority = 'Junior';
-    if (candidateYears >= 8) {
-      candidateSeniority = 'Lead/Principal';
-    } else if (candidateYears >= 5) {
-      candidateSeniority = 'Senior';
-    } else if (candidateYears >= 2) {
-      candidateSeniority = 'Mid';
-    }
 
-    // 2. Determine Job Seniority Level based on title keywords and required experience
-    let jobSeniority = 'Junior';
-    if (/\b(principal|staff|architect|director|vp|head|vice president)\b/i.test(titleLower) || reqs.experienceRequired >= 8) {
-      jobSeniority = 'Lead/Principal';
-    } else if (/\b(lead|manager|engineering lead|tech lead)\b/i.test(titleLower) || reqs.experienceRequired >= 6) {
-      jobSeniority = 'Lead';
-    } else if (/\b(senior|sr\b|sr\.|\biii\b|\biv\b|\bv\b)\b/i.test(titleLower) || reqs.experienceRequired >= 5) {
-      jobSeniority = 'Senior';
-    } else if (reqs.experienceRequired >= 2) {
-      jobSeniority = 'Mid';
-    }
-
-    // 3. Seniority Exclusions: Prevent senior recommendations reaching junior candidates
-    if (candidateSeniority === 'Junior') {
-      if (jobSeniority === 'Senior' || jobSeniority === 'Lead' || jobSeniority === 'Lead/Principal') {
-        return false;
-      }
-    }
-    if (candidateSeniority === 'Mid') {
-      if (jobSeniority === 'Lead/Principal') {
-        return false;
-      }
-    }
-
-    // 4. Experience constraint check with a minor grace period for senior candidates
-    const allowedDeficit = (effectiveExperienceRequired >= 5 && candidateYears >= 3) ? 1.5 : 0;
-    if (candidateYears + allowedDeficit < effectiveExperienceRequired) {
+    // Reject if candidate doesn't have enough experience
+    if (candidateYears < minYearsRequired) {
       return false;
     }
 
-    // 5. Remote & Location constraint checks
+    // Reject if candidate is highly overqualified (e.g. senior matching entry level role)
+    if (candidateYears >= 5 && maxYearsRequired <= 2) {
+      return false;
+    }
+
+    // 3. Remote & Location constraint checks
     const candidateLocations = (profile.preferences.locations || [])
       .map(loc => loc.trim().toLowerCase())
       .filter(Boolean);
     const isCandidateOpenToRemote = !!profile.preferences.remote;
     
     const jobLocLower = (reqs.location || '').toLowerCase();
-    const isJobRemote = !!reqs.remoteAllowed || jobLocLower.includes('remote');
+    const isJobRemote = !!reqs.remoteAllowed || jobLocLower.includes('remote') || descLower.includes('remote');
 
     // If candidate has disabled remote completely, reject any remote jobs
     if (!isCandidateOpenToRemote && isJobRemote) {
@@ -253,7 +291,6 @@ export class MatchingService {
         if (jobLocLower.includes(prefLoc) || prefLoc.includes(jobLocLower)) {
           return true;
         }
-        // Bangalore <-> Bengaluru synonym resolution
         const isBangalore = (s: string) => s.includes('bangalore') || s.includes('bengaluru');
         if (isBangalore(jobLocLower) && isBangalore(prefLoc)) {
           return true;
@@ -262,13 +299,11 @@ export class MatchingService {
       });
 
       if (hasPhysicalMatch) {
-        // Direct physical match is always allowed
         return true;
       }
 
       // If no direct physical match, check if we can match via remote
       if (isJobRemote && isCandidateOpenToRemote) {
-        // Candidate and job both allow remote, but check for country/province conflicts
         const isCandidateInIndia = candidateLocations.some(loc => 
           loc.includes('india') || loc.includes('bangalore') || loc.includes('bengaluru') || loc.includes('ahmedabad') || loc.includes('noida') || loc.includes('delhi') || loc.includes('mumbai') || loc.includes('pune')
         );
@@ -280,17 +315,14 @@ export class MatchingService {
         );
 
         if (isCandidateInIndia) {
-          // Reject if job explicitly targets US, Canada, Europe, Latam, etc.
           if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('latam')) {
             return false;
           }
         } else if (isCandidateInCanada) {
-          // Reject if job specifies US, India, UK, etc. Also reject out-of-province remote roles (e.g. Vancouver/BC if user preferred Ontario)
           if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('vancouver') || jobLocLower.includes('bc') || jobLocLower.includes('alberta')) {
             return false;
           }
         } else if (isCandidateInUS) {
-          // Reject if job specifies India, Canada, UK, Europe, etc.
           if (jobLocLower.includes('india') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
             return false;
           }
@@ -299,16 +331,14 @@ export class MatchingService {
         return true;
       }
 
-      // No physical match and remote is not available/valid
       return false;
     } else {
-      // Candidate has no physical location preferences (open to any location)
       if (!isCandidateOpenToRemote && isJobRemote) {
         return false;
       }
     }
 
-    // 6. Employment Type constraint check
+    // 4. Employment Type constraint check
     if (profile.preferences.employmentTypes && profile.preferences.employmentTypes.length > 0) {
       const jobEmpLower = reqs.employmentType.toLowerCase();
       const hasEmpTypeMatch = profile.preferences.employmentTypes.some(type => 

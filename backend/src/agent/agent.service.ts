@@ -28,7 +28,6 @@ export class AgentService implements OnApplicationBootstrap {
     try {
       const fileProfile = this.profileService.getProfile();
       if (fileProfile && fileProfile.email) {
-        // Sync the profile from profile.json to PostgreSQL
         const mappedProfile: UserProfile = {
           fullName: fileProfile.fullName,
           email: fileProfile.email,
@@ -39,13 +38,13 @@ export class AgentService implements OnApplicationBootstrap {
             : fileProfile.experienceLevel.toLowerCase().includes('mid') 
               ? 3 
               : 1, // Map string level to years
-          education: fileProfile.education ? fileProfile.education.map(e => `${e.degree} at ${e.institution}`) : [],
-          projects: fileProfile.projects ? fileProfile.projects.map(p => `${p.title}: ${p.description}`) : [],
+          education: fileProfile.education || [],
+          projects: [],
           achievements: [],
-          preferredRoles: [fileProfile.targetRole],
+          preferredRoles: [],
           preferences: {
-            locations: [fileProfile.targetLocation],
-            remote: fileProfile.isRemoteOpen,
+            locations: [],
+            remote: true,
             employmentTypes: ['Full-time'],
           },
         };
