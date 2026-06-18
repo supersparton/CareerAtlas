@@ -83,46 +83,195 @@
       }
     }
 
+    private readonly roleAliases: { [key: string]: string[] } = {
+      'software engineer': [
+        'software engineer',
+        'software developer',
+        'sde',
+        'sde i',
+        'sde-ii',
+        'sde-2',
+        'sde-1',
+        'sde-3',
+        'sde iii',
+        'senior software engineer',
+        'junior software engineer',
+        'application engineer',
+        'member of technical staff',
+        'mts',
+        'technical staff member',
+        'software development engineer'
+      ],
+      'backend engineer': [
+        'backend engineer',
+        'backend developer',
+        'node.js developer',
+        'node developer',
+        'python backend developer',
+        'python developer',
+        'java developer',
+        'java backend developer',
+        'golang developer',
+        'golang backend developer',
+        'go developer',
+        'c# developer',
+        'dot net developer',
+        '.net developer',
+        'backend software engineer'
+      ],
+      'frontend engineer': [
+        'frontend engineer',
+        'frontend developer',
+        'front-end developer',
+        'front end developer',
+        'react developer',
+        'react.js developer',
+        'vue developer',
+        'angular developer',
+        'ui engineer',
+        'ui developer',
+        'frontend software engineer'
+      ],
+      'fullstack engineer': [
+        'fullstack engineer',
+        'full stack developer',
+        'full-stack developer',
+        'full stack engineer',
+        'fullstack developer'
+      ],
+      'data analyst': [
+        'data analyst',
+        'business analyst',
+        'analytics engineer',
+        'product analyst',
+        'data analytics'
+      ],
+      'data engineer': [
+        'data engineer',
+        'data platform engineer',
+        'big data engineer',
+        'analytics engineer'
+      ],
+      'data scientist': [
+        'data scientist',
+        'machine learning engineer',
+        'ml engineer',
+        'ai engineer',
+        'applied scientist'
+      ],
+      'devops engineer': [
+        'devops engineer',
+        'site reliability engineer',
+        'sre',
+        'platform engineer',
+        'cloud engineer',
+        'systems engineer'
+      ],
+      'product manager': [
+        'product manager',
+        'pm',
+        'associate product manager',
+        'technical product manager'
+      ]
+    };
+
+    private readonly locationSynonyms: { [key: string]: string } = {
+      'bangalore': 'bengaluru',
+      'banglore': 'bengaluru',
+      'bangalore urban': 'bengaluru',
+      'bengaluru': 'bengaluru',
+      'mumbai': 'mumbai',
+      'bombay': 'mumbai',
+      'new york': 'new york',
+      'new york city': 'new york',
+      'nyc': 'new york',
+      'ny': 'new york',
+      'san francisco': 'san francisco',
+      'sf': 'san francisco',
+      'bay area': 'san francisco'
+    };
+
+    private computeStringSimilarity(str1: string, str2: string): { score: number; method: string } {
+      const s1 = str1.toLowerCase().trim();
+      const s2 = str2.toLowerCase().trim();
+
+      if (s1 === s2) {
+        return { score: 1.0, method: 'exact' };
+      }
+
+      // Check if they belong to the same alias group
+      for (const [groupName, aliases] of Object.entries(this.roleAliases)) {
+        const matchesS1 = aliases.some(alias => s1.includes(alias) || alias.includes(s1));
+        const matchesS2 = aliases.some(alias => s2.includes(alias) || alias.includes(s2));
+        if (matchesS1 && matchesS2) {
+          const confidence = s1.includes('software') && s2.includes('sde') ? 0.95 : 0.92;
+          return { score: confidence, method: 'alias mapping' };
+        }
+      }
+
+      // Fallback: character bigram Dice's Coefficient
+      const getBigrams = (str: string) => {
+        const bigrams = new Set<string>();
+        for (let i = 0; i < str.length - 1; i++) {
+          bigrams.add(str.slice(i, i + 2));
+        }
+        return bigrams;
+      };
+
+      const b1 = getBigrams(s1);
+      const b2 = getBigrams(s2);
+
+      if (b1.size === 0 || b2.size === 0) {
+        return { score: 0.0, method: 'bigram overlap' };
+      }
+
+      let intersection = 0;
+      for (const b of b1) {
+        if (b2.has(b)) {
+          intersection++;
+        }
+      }
+
+      const dice = (2.0 * intersection) / (b1.size + b2.size);
+      const score = Math.round(dice * 100) / 100;
+      return { score, method: 'fuzzy matching' };
+    }
+
     private isTitleRelevant(jobTitle: string, searchTerm: string): boolean {
       const titleLower = jobTitle.toLowerCase();
       const searchLower = searchTerm.toLowerCase();
 
-      // 1. Exact or partial substring match
-      if (titleLower.includes(searchLower) || searchLower.includes(titleLower)) {
-        return true;
-      }
-
-      const normTitle = jobTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-      // 2. Extract key terms from search term (ignoring general words)
-      const searchWords = searchLower
-        .split(/[\s\-/,()]+/)
-        .map(w => w.trim())
-        .filter(w => w.length > 2 && w !== 'developer' && w !== 'engineer' && w !== 'job' && w !== 'intern' && w !== 'role');
-
-      if (searchWords.length > 0) {
-        // Check if the normalized job title contains at least one of the normalized search words
-        const matchesSearchWord = searchWords.some(word => {
-          const normWord = word.replace(/[^a-z0-9]/g, '');
-          return normTitle.includes(normWord);
-        });
-        if (!matchesSearchWord) {
-          return false;
-        }
-      }
-
-      // 3. Negations: If the job title contains negative keywords like "sales", "hr", "marketing", "manager"
+      // Check negations first
       const negativeKeywords = ['sales', 'marketing', 'recruiter', 'hr', 'accountant', 'ticketing', 'travel', 'admin', 'writer', 'seo'];
       const hasNegative = negativeKeywords.some(neg => {
-        // Only reject if the search term does NOT contain this negative keyword
         return titleLower.includes(neg) && !searchLower.includes(neg);
       });
-
       if (hasNegative) {
+        this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected due to negative keyword`);
         return false;
       }
 
-      return true;
+      const { score, method } = this.computeStringSimilarity(jobTitle, searchTerm);
+
+      if (score >= 0.50) {
+        this.logger.log(`[VALIDATION] "${searchTerm}" matched "${jobTitle}" via ${method} | confidence = ${score}`);
+        return true;
+      }
+
+      this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected for search "${searchTerm}" (confidence = ${score})`);
+      return false;
+    }
+
+    private normalizeLocation(loc: string): string {
+      let l = loc.toLowerCase().trim();
+      l = l.replace(/[^a-z0-9\s]/g, '');
+
+      for (const [key, normalized] of Object.entries(this.locationSynonyms)) {
+        if (l === key || l.includes(key)) {
+          return normalized;
+        }
+      }
+      return l;
     }
 
     private isLocationRelevant(jobLocation: string, profile: any): boolean {
@@ -141,26 +290,17 @@
         return true;
       }
 
-      // If candidate has specific physical location preferences
       if (locations.length > 0) {
+        const normJobLoc = this.normalizeLocation(jobLocation);
         const hasMatch = locations.some(loc => {
-          const locLower = loc.toLowerCase().trim();
-          if (jobLocLower.includes(locLower) || locLower.includes(jobLocLower)) {
-            return true;
-          }
-          // Bangalore <-> Bengaluru synonym resolution
-          const isBangalore = (s: string) => s.includes('bangalore') || s.includes('bengaluru');
-          if (isBangalore(jobLocLower) && isBangalore(locLower)) {
-            return true;
-          }
-          return false;
+          const normPrefLoc = this.normalizeLocation(loc);
+          return normJobLoc.includes(normPrefLoc) || normPrefLoc.includes(normJobLoc);
         });
         if (hasMatch) {
           return true;
         }
       }
 
-      // If candidate wants remote, and job is remote (handled above), or candidate is open to any location (locations is empty)
       if (locations.length === 0 && isRemoteOpen) {
         return true;
       }

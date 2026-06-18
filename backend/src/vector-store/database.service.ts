@@ -137,6 +137,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ALTER TABLE results ADD COLUMN IF NOT EXISTS run_id VARCHAR(255);
       `);
 
+      // 5. Create sequence for run IDs
+      await client.query(`
+        CREATE SEQUENCE IF NOT EXISTS workflow_run_id_seq START WITH 1;
+      `);
+
       await client.query('COMMIT');
       this.logger.log('[DATABASE] Database schema initialized successfully.');
     } catch (err) {
@@ -145,6 +150,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw err;
     } finally {
       client.release();
+    }
+  }
+
+  async getNextExecutionId(): Promise<string> {
+    try {
+      const res = await this.query("SELECT nextval('workflow_run_id_seq') as val");
+      const num = res.rows[0].val;
+      return `run_${String(num).padStart(4, '0')}`;
+    } catch (err) {
+      this.logger.error(`[DATABASE] Failed to get next run sequence: ${err.message}`);
+      return `run_${Date.now()}`;
     }
   }
 }

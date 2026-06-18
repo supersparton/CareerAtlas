@@ -315,20 +315,27 @@ Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFE
         return [];
       };
 
+      const emailLower = String(parsedResult.email || '').trim().toLowerCase();
+      const existingProfile = await this.getProfileByEmail(emailLower);
+      console.log(`
+[TRACE] before_resume_upload:
+canonical_role: ${existingProfile ? JSON.stringify(existingProfile.preferredRoles) : 'None'}
+`);
+
       const skills = typeof parsedResult.skills === 'string'
         ? parsedResult.skills.split(',').map(s => s.trim()).filter(Boolean)
         : parseArray(parsedResult.skills);
 
       const profile: UserProfile = {
         fullName: String(parsedResult.fullName || '').trim(),
-        email: String(parsedResult.email || '').trim().toLowerCase(),
+        email: emailLower,
         phone: parsedResult.phone ? String(parsedResult.phone).trim() : undefined,
         skills,
         experienceYears: parseFloat(parsedResult.experienceYears) || 0,
         education: parseArray(parsedResult.education),
         projects: parseArray(parsedResult.projects),
         achievements: parseArray(parsedResult.achievements),
-        preferredRoles: [],
+        preferredRoles: parseArray(parsedResult.preferredRoles),
         preferences: {
           locations: [],
           remote: true,
@@ -338,7 +345,14 @@ Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFE
 
       // Persist profile to the database
       this.emitTaskEvent(taskId, 'running', 'Saving structured user profile and preferences to database...');
-      return await this.saveProfileToDb(profile, taskId);
+      const savedProfile = await this.saveProfileToDb(profile, taskId);
+      
+      console.log(`
+[TRACE] after_resume_upload:
+canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
+`);
+
+      return savedProfile;
     } catch (e) {
       this.logger.error(`[PROFILE] Structuring failed: ${e.message}`, e.stack);
       throw new Error(`Structuring failed: ${e.message}`);
@@ -532,12 +546,25 @@ Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFE
       const responseText = await this.invokeModelWithFallback(formattedPrompt);
       const cleanedResponse = this.cleanJsonText(responseText);
       const parsed = JSON.parse(cleanedResponse);
+      let suggestions: string[] = [];
       if (Array.isArray(parsed)) {
-        return parsed.map(t => String(t).trim()).filter(Boolean);
+        suggestions = parsed.map(t => String(t).trim()).filter(Boolean);
+      } else {
+        suggestions = activeProfile.preferredRoles;
       }
-      return activeProfile.preferredRoles;
+      console.log(`
+[TRACE] after_suggestions:
+canonical_role: ${JSON.stringify(activeProfile.preferredRoles)}
+suggestions: ${JSON.stringify(suggestions)}
+`);
+      return suggestions;
     } catch (e) {
       this.logger.error(`[PROFILE] Failed to suggest titles: ${e.message}`);
+      console.log(`
+[TRACE] after_suggestions:
+canonical_role: ${JSON.stringify(activeProfile.preferredRoles)}
+suggestions: ${JSON.stringify(activeProfile.preferredRoles)}
+`);
       return activeProfile.preferredRoles;
     }
   }

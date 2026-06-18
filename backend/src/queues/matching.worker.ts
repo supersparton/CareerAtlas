@@ -3,7 +3,6 @@ import { Queue, Job as BullJob } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { MatchingService } from '../matching/matching.service';
 import { ProfileService } from '../profile/profile.service';
-
 import { NotifierService } from '../notifier/notifier.service';
 import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { DatabaseService } from '../vector-store/database.service';
@@ -103,7 +102,12 @@ export class MatchingWorker extends WorkerHost {
       const sortedJobs = rankedMatches.sort((a, b) => b.finalScore - a.finalScore);
       const topJobs = sortedJobs.slice(0, limit);
 
-      this.logger.log(`[MATCHING-WORKER] Selected top ${topJobs.length} matches. Sending alerts...`);
+      // Log ranked jobs
+      for (const match of sortedJobs) {
+        this.logger.log(`Job ranked: "${match.job.title}" at "${match.job.company}" - Score: ${match.finalScore}`);
+      }
+
+      this.logger.log(`[MATCHING-WORKER] Selected top ${topJobs.length} matches. Saving recommendation results to database...`);
 
       const profileObj = await this.profileService.getProfileById(userId);
 
@@ -130,10 +134,13 @@ export class MatchingWorker extends WorkerHost {
               Explain the match clearly and professionally, highlighting the candidate's skills and projects that align.
               Do not include any greeting or conversational fluff. Write exactly 2 sentences.
             `;
+            const startTime = Date.now();
             const response = await this.profileService.invokeModel(reasoningPrompt);
+            const latency = Date.now() - startTime;
             if (response && response.trim()) {
               aiReasoning = response.trim();
             }
+            this.logger.log(`LLM evaluation completed for "${job.title}" - Latency: ${latency}ms`);
           } catch (reasonErr) {
             this.logger.warn(`Failed to generate LLM reasoning for job ${job.jobId}: ${reasonErr.message}`);
           }
@@ -160,28 +167,19 @@ export class MatchingWorker extends WorkerHost {
           ]);
 
           if (insertRes.rowCount === 0) {
-            this.logger.log(`[MATCHING-WORKER] Skipping notification: Job "${job.title}" at "${job.company}" was already notified in database.`);
-            this.coordinator.addLog(runId, `Skipping notification: "${job.title}" at "${job.company}" was already notified.`);
+            this.logger.log(`[MATCHING-WORKER] Skipping duplicate save: Job "${job.title}" at "${job.company}" already exists in database.`);
+            this.coordinator.addLog(runId, `Skipping duplicate: "${job.title}" at "${job.company}" is already saved.`);
             continue;
           }
         } catch (dbErr) {
           this.logger.error(`[MATCHING-WORKER] Failed to save result match to database: ${dbErr.message}`);
-          continue; // Skip alerting if DB fails to ensure consistent state
+          continue; 
         }
 
-        // Trigger Application Agent (Telegram Notifier)
-        await this.notifierService.sendJobAlert(
-          job,
-          finalScore,
-          {
-            skills: skillScore,
-            experience: experienceScore,
-            location: Math.round(semanticScore),
-          },
-          aiReasoning
-        );
-        this.coordinator.addLog(runId, `Telegram alert sent successfully for "${job.title}" at ${job.company}.`);
+        this.coordinator.addLog(runId, `Recommendation result saved successfully for "${job.title}" at ${job.company}.`);
       }
+
+      this.logger.log(`Workflow finalizer completed. Top job matches finalized.`);
 
       this.coordinator.updateStep(runId, 'step-7', 'success');
       this.coordinator.completeRun(runId, `Workflow completed successfully. Found ${topJobs.length} matching jobs.`);

@@ -69,6 +69,15 @@ export class MatchingService {
     'k8s': 'devops',
   };
 
+  private stats = {
+    titleReject: 0,
+    locationReject: 0,
+    experienceReject: 0,
+    employmentReject: 0,
+    remoteReject: 0,
+    solelyExperienceReject: 0,
+  };
+
   constructor(
     private readonly db: DatabaseService,
     private readonly qdrantService: QdrantService,
@@ -86,6 +95,11 @@ export class MatchingService {
       this.logger.error(`[MATCHING] User profile for ID ${userId} not found.`);
       return [];
     }
+
+    console.log(`
+[TRACE] before_matching:
+canonical_role: ${JSON.stringify(profile.preferredRoles)}
+`);
 
     // 2. Retrieve user vector from Qdrant
     let userVector: number[] | null = null;
@@ -155,12 +169,42 @@ export class MatchingService {
     const seenJobRes = await this.db.query('SELECT job_id FROM results WHERE user_id = $1', [userId]);
     const seenJobIds = new Set(seenJobRes.rows.map((r) => r.job_id));
 
+    this.stats = {
+      titleReject: 0,
+      locationReject: 0,
+      experienceReject: 0,
+      employmentReject: 0,
+      remoteReject: 0,
+      solelyExperienceReject: 0,
+    };
+
     const filteredJobs = jobsWithReqs.filter(({ job, reqs }) => {
       if (seenJobIds.has(job.jobId)) {
         return false;
       }
-      return this.applyHardFilters(profile, reqs, job.title, job.description || '');
+      return this.applyHardFilters(profile, reqs, job.title, job.description || '', job.company);
     });
+
+    console.log(`
+Rejected by title
+${this.stats.titleReject}
+
+Rejected by location
+${this.stats.locationReject}
+
+Rejected by experience
+${this.stats.experienceReject}
+
+Rejected by employment
+${this.stats.employmentReject}
+
+Rejected by remote
+${this.stats.remoteReject}
+
+Rejected solely because of experience
+${this.stats.solelyExperienceReject}
+`);
+
     this.logger.log(`[MATCHING] Hard Filter Engine: Approved ${filteredJobs.length} / ${jobsWithReqs.length} jobs.`);
     
     if (filteredJobs.length === 0) return [];
@@ -190,22 +234,186 @@ export class MatchingService {
     return sorted.slice(0, limit);
   }
 
+  private readonly roleAliases: { [key: string]: string[] } = {
+    'software engineer': [
+      'software engineer',
+      'software developer',
+      'sde',
+      'sde i',
+      'sde-ii',
+      'sde-2',
+      'sde-1',
+      'sde-3',
+      'sde iii',
+      'senior software engineer',
+      'junior software engineer',
+      'application engineer',
+      'member of technical staff',
+      'mts',
+      'technical staff member',
+      'software development engineer'
+    ],
+    'backend engineer': [
+      'backend engineer',
+      'backend developer',
+      'node.js developer',
+      'node developer',
+      'python backend developer',
+      'python developer',
+      'java developer',
+      'java backend developer',
+      'golang developer',
+      'golang backend developer',
+      'go developer',
+      'c# developer',
+      'dot net developer',
+      '.net developer',
+      'backend software engineer'
+    ],
+    'frontend engineer': [
+      'frontend engineer',
+      'frontend developer',
+      'front-end developer',
+      'front end developer',
+      'react developer',
+      'react.js developer',
+      'vue developer',
+      'angular developer',
+      'ui engineer',
+      'ui developer',
+      'frontend software engineer'
+    ],
+    'fullstack engineer': [
+      'fullstack engineer',
+      'full stack developer',
+      'full-stack developer',
+      'full stack engineer',
+      'fullstack developer'
+    ],
+    'data analyst': [
+      'data analyst',
+      'business analyst',
+      'analytics engineer',
+      'product analyst',
+      'data analytics'
+    ],
+    'data engineer': [
+      'data engineer',
+      'data platform engineer',
+      'big data engineer',
+      'analytics engineer'
+    ],
+    'data scientist': [
+      'data scientist',
+      'machine learning engineer',
+      'ml engineer',
+      'ai engineer',
+      'applied scientist'
+    ],
+    'devops engineer': [
+      'devops engineer',
+      'site reliability engineer',
+      'sre',
+      'platform engineer',
+      'cloud engineer',
+      'systems engineer'
+    ],
+    'product manager': [
+      'product manager',
+      'pm',
+      'associate product manager',
+      'technical product manager'
+    ]
+  };
+
+  private readonly locationSynonyms: { [key: string]: string } = {
+    'bangalore': 'bengaluru',
+    'banglore': 'bengaluru',
+    'bangalore urban': 'bengaluru',
+    'bengaluru': 'bengaluru',
+    'mumbai': 'mumbai',
+    'bombay': 'mumbai',
+    'new york': 'new york',
+    'new york city': 'new york',
+    'nyc': 'new york',
+    'ny': 'new york',
+    'san francisco': 'san francisco',
+    'sf': 'san francisco',
+    'bay area': 'san francisco'
+  };
+
+  private computeStringSimilarity(str1: string, str2: string): { score: number; method: string } {
+    const s1 = str1.toLowerCase().trim();
+    const s2 = str2.toLowerCase().trim();
+
+    if (s1 === s2) {
+      return { score: 1.0, method: 'exact' };
+    }
+
+    // Check if they belong to the same alias group
+    for (const [groupName, aliases] of Object.entries(this.roleAliases)) {
+      const matchesS1 = aliases.some(alias => s1.includes(alias) || alias.includes(s1));
+      const matchesS2 = aliases.some(alias => s2.includes(alias) || alias.includes(s2));
+      if (matchesS1 && matchesS2) {
+        const confidence = s1.includes('software') && s2.includes('sde') ? 0.95 : 0.92;
+        return { score: confidence, method: 'alias mapping' };
+      }
+    }
+
+    // Fallback: character bigram Dice's Coefficient
+    const getBigrams = (str: string) => {
+      const bigrams = new Set<string>();
+      for (let i = 0; i < str.length - 1; i++) {
+        bigrams.add(str.slice(i, i + 2));
+      }
+      return bigrams;
+    };
+
+    const b1 = getBigrams(s1);
+    const b2 = getBigrams(s2);
+
+    if (b1.size === 0 || b2.size === 0) {
+      return { score: 0.0, method: 'bigram overlap' };
+    }
+
+    let intersection = 0;
+    for (const b of b1) {
+      if (b2.has(b)) {
+        intersection++;
+      }
+    }
+
+    const dice = (2.0 * intersection) / (b1.size + b2.size);
+    const score = Math.round(dice * 100) / 100;
+    return { score, method: 'fuzzy matching' };
+  }
+
+  private normalizeLocation(loc: string): string {
+    let l = loc.toLowerCase().trim();
+    l = l.replace(/[^a-z0-9\s]/g, '');
+
+    for (const [key, normalized] of Object.entries(this.locationSynonyms)) {
+      if (l === key || l.includes(key)) {
+        return normalized;
+      }
+    }
+    return l;
+  }
+
   /**
    * Stage 3: Hard Filter Engine (Mandatory constraints check)
    */
-  private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string, jobDescription: string): boolean {
+  private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string, jobDescription: string, jobCompany = 'Unknown'): boolean {
     const titleLower = jobTitle.toLowerCase();
     const descLower = jobDescription.toLowerCase();
-    
-    // 1. Role / Search Term Filter
+
+    // 1. Role / Search Term Filter using similarity matching
+    let titlePass = true;
     if (profile.preferredRoles && profile.preferredRoles.length > 0) {
-      const isTitleMatch = profile.preferredRoles.some(role => {
-        const roleLower = role.toLowerCase().trim();
-        return titleLower.includes(roleLower) || roleLower.includes(titleLower);
+      titlePass = profile.preferredRoles.some(role => {
+        const { score } = this.computeStringSimilarity(jobTitle, role);
+        return score >= 0.50;
       });
-      if (!isTitleMatch) {
-        return false;
-      }
     }
 
     // 2. Seniority & Experience Filter
@@ -214,37 +422,28 @@ export class MatchingService {
     
     const textToScan = titleLower + ' ' + descLower;
 
-    // Principal / Architect / VP / Director / IC5 / IC6 / L7 / L8
     if (
       /\b(principal|architect|director|vp|head|vice president|ic5|ic6|l7|l8)\b/i.test(titleLower) ||
       /\b(career level - ic5|career level - ic6|level 7|level 8)\b/i.test(textToScan)
     ) {
       minYearsRequired = Math.max(minYearsRequired, 8);
-    }
-    // Lead / Staff / Manager / IC4 / L6
-    else if (
+    } else if (
       /\b(lead|manager|staff|engineering lead|tech lead|ic4|l6)\b/i.test(titleLower) ||
       /\b(career level - ic4|level 6)\b/i.test(textToScan)
     ) {
       minYearsRequired = Math.max(minYearsRequired, 6);
-    }
-    // Senior / SDE 3 / SDE III / IC3 / L5 / Developer 3
-    else if (
+    } else if (
       /\b(senior|sr\b|sr\.|\biii\b|sde 3|sde iii|sde-3|sde-iii|developer 3|ic3|l5)\b/i.test(titleLower) ||
       /\b(career level - ic3|level 5)\b/i.test(textToScan)
     ) {
       minYearsRequired = Math.max(minYearsRequired, 5);
-    }
-    // Mid-Level / SDE 2 / SDE II / IC2 / L4 / Developer 2
-    else if (
+    } else if (
       /\b(mid|intermediate|sde 2|sde ii|sde-2|sde-ii|developer 2|ic2|l4)\b/i.test(titleLower) ||
       /\b(career level - ic2|level 4)\b/i.test(textToScan)
     ) {
       minYearsRequired = Math.max(minYearsRequired, 2);
       maxYearsRequired = 5;
-    }
-    // Fresher / Entry-Level / Intern / SDE 1 / SDE I / IC1 / L3 / Developer 1
-    else if (
+    } else if (
       /\b(intern|internship|fresher|entry level|associate|graduate|trainee|sde 1|sde i|sde-1|sde-i|developer 1|ic1|l3)\b/i.test(titleLower) ||
       /\b(career level - ic1|level 3)\b/i.test(textToScan)
     ) {
@@ -252,7 +451,6 @@ export class MatchingService {
       maxYearsRequired = 2;
     }
 
-    // Explicit years match
     const yearsMatch = textToScan.match(/\b(\d+)\s*\+?\s*years?\s+(?:of\s+)?experience\b/i);
     if (yearsMatch) {
       const explicitYears = parseInt(yearsMatch[1], 10);
@@ -260,15 +458,12 @@ export class MatchingService {
     }
 
     const candidateYears = profile.experienceYears;
-
-    // Reject if candidate doesn't have enough experience
+    let experiencePass = true;
     if (candidateYears < minYearsRequired) {
-      return false;
+      experiencePass = false;
     }
-
-    // Reject if candidate is highly overqualified (e.g. senior matching entry level role)
     if (candidateYears >= 5 && maxYearsRequired <= 2) {
-      return false;
+      experiencePass = false;
     }
 
     // 3. Remote & Location constraint checks
@@ -280,76 +475,130 @@ export class MatchingService {
     const jobLocLower = (reqs.location || '').toLowerCase();
     const isJobRemote = !!reqs.remoteAllowed || jobLocLower.includes('remote') || descLower.includes('remote');
 
-    // If candidate has disabled remote completely, reject any remote jobs
+    let remotePass = true;
     if (!isCandidateOpenToRemote && isJobRemote) {
-      return false;
+      remotePass = false;
     }
 
-    // If candidate has specified preferred physical locations
+    let locationPass = true;
     if (candidateLocations.length > 0) {
+      const normJobLoc = this.normalizeLocation(jobLocLower);
       const hasPhysicalMatch = candidateLocations.some(prefLoc => {
-        if (jobLocLower.includes(prefLoc) || prefLoc.includes(jobLocLower)) {
-          return true;
-        }
-        const isBangalore = (s: string) => s.includes('bangalore') || s.includes('bengaluru');
-        if (isBangalore(jobLocLower) && isBangalore(prefLoc)) {
-          return true;
-        }
-        return false;
+        const normPrefLoc = this.normalizeLocation(prefLoc);
+        return normJobLoc.includes(normPrefLoc) || normPrefLoc.includes(normJobLoc);
       });
 
-      if (hasPhysicalMatch) {
-        return true;
-      }
+      if (!hasPhysicalMatch) {
+        if (isJobRemote && isCandidateOpenToRemote) {
+          const isCandidateInIndia = candidateLocations.some(loc => 
+            loc.includes('india') || loc.includes('bangalore') || loc.includes('bengaluru') || loc.includes('ahmedabad') || loc.includes('noida') || loc.includes('delhi') || loc.includes('mumbai') || loc.includes('pune')
+          );
+          const isCandidateInCanada = candidateLocations.some(loc => 
+            loc.includes('canada') || loc.includes('ontario') || loc.includes('toronto') || loc.includes('vancouver') || loc.includes('bc') || loc.includes('alberta')
+          );
+          const isCandidateInUS = candidateLocations.some(loc => 
+            loc.includes('usa') || loc.includes('united states') || loc.includes('california') || loc.includes('new york') || loc.includes('texas') || loc.includes('sf') || loc.includes('chicago')
+          );
 
-      // If no direct physical match, check if we can match via remote
-      if (isJobRemote && isCandidateOpenToRemote) {
-        const isCandidateInIndia = candidateLocations.some(loc => 
-          loc.includes('india') || loc.includes('bangalore') || loc.includes('bengaluru') || loc.includes('ahmedabad') || loc.includes('noida') || loc.includes('delhi') || loc.includes('mumbai') || loc.includes('pune')
-        );
-        const isCandidateInCanada = candidateLocations.some(loc => 
-          loc.includes('canada') || loc.includes('ontario') || loc.includes('toronto') || loc.includes('vancouver') || loc.includes('bc') || loc.includes('alberta')
-        );
-        const isCandidateInUS = candidateLocations.some(loc => 
-          loc.includes('usa') || loc.includes('united states') || loc.includes('california') || loc.includes('new york') || loc.includes('texas') || loc.includes('sf') || loc.includes('chicago')
-        );
-
-        if (isCandidateInIndia) {
-          if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('latam')) {
-            return false;
+          if (isCandidateInIndia) {
+            if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('latam')) {
+              locationPass = false;
+            }
+          } else if (isCandidateInCanada) {
+            if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('vancouver') || jobLocLower.includes('bc') || jobLocLower.includes('alberta')) {
+              locationPass = false;
+            }
+          } else if (isCandidateInUS) {
+            if (jobLocLower.includes('india') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
+              locationPass = false;
+            }
           }
-        } else if (isCandidateInCanada) {
-          if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('vancouver') || jobLocLower.includes('bc') || jobLocLower.includes('alberta')) {
-            return false;
-          }
-        } else if (isCandidateInUS) {
-          if (jobLocLower.includes('india') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
-            return false;
-          }
+        } else {
+          locationPass = false;
         }
-        
-        return true;
       }
-
-      return false;
     } else {
       if (!isCandidateOpenToRemote && isJobRemote) {
-        return false;
+        locationPass = false;
       }
     }
 
     // 4. Employment Type constraint check
+    let employmentPass = true;
     if (profile.preferences.employmentTypes && profile.preferences.employmentTypes.length > 0) {
       const jobEmpLower = reqs.employmentType.toLowerCase();
-      const hasEmpTypeMatch = profile.preferences.employmentTypes.some(type => 
+      employmentPass = profile.preferences.employmentTypes.some(type => 
         jobEmpLower.includes(type.toLowerCase()) || type.toLowerCase().includes(jobEmpLower)
       );
-      if (!hasEmpTypeMatch) {
-        return false;
+    }
+
+    const isApproved = titlePass && locationPass && employmentPass && experiencePass && remotePass;
+
+    const rejectReasons: string[] = [];
+    if (!titlePass) rejectReasons.push('TITLE_MISMATCH');
+    if (!locationPass) rejectReasons.push('LOCATION_MISMATCH');
+    if (!experiencePass) rejectReasons.push('EXPERIENCE_MISMATCH');
+    if (!employmentPass) rejectReasons.push('EMPLOYMENT_MISMATCH');
+    if (!remotePass) rejectReasons.push('REMOTE_MISMATCH');
+
+    // Experience checks tracing values
+    const gradYearMatch = (profile.education || []).join(' ').match(/\b(19|20)\d{2}\b/);
+    const graduationYear = gradYearMatch ? gradYearMatch[0] : 'None';
+    
+    // Calculate seniority
+    let seniority = 'Junior';
+    if (profile.experienceYears >= 5) {
+      seniority = 'Senior';
+    } else if (profile.experienceYears >= 2) {
+      seniority = 'Mid';
+    }
+
+    console.log(`
+================================================
+Job
+title: ${jobTitle}
+company: ${jobCompany}
+location: ${reqs.location || 'Unknown'}
+employment_type: ${reqs.employmentType || 'Unknown'}
+required_experience: ${minYearsRequired}
+
+User Profile
+canonical_role: ${profile.preferredRoles[0] || 'None'}
+target_titles: ${JSON.stringify(profile.preferredRoles || [])}
+experience_years: ${profile.experienceYears}
+locations: ${JSON.stringify(profile.preferences.locations || [])}
+employmentTypes: ${JSON.stringify(profile.preferences.employmentTypes || [])}
+remote: ${profile.preferences.remote}
+
+Checks
+titlePass: ${titlePass}
+locationPass: ${locationPass}
+employmentPass: ${employmentPass}
+experiencePass: ${experiencePass}
+remotePass: ${remotePass}
+
+Final Decision
+${isApproved ? 'APPROVED' : 'REJECTED'}
+
+Reject Reasons
+${rejectReasons.join('\n') || 'None'}
+================================================
+`);
+
+    if (!isApproved) {
+      if (!titlePass) this.stats.titleReject++;
+      if (!locationPass) this.stats.locationReject++;
+      if (!experiencePass) this.stats.experienceReject++;
+      if (!employmentPass) this.stats.employmentReject++;
+      if (!remotePass) this.stats.remoteReject++;
+      
+      const onlyExperienceFailed = titlePass && locationPass && employmentPass && remotePass && !experiencePass;
+      if (onlyExperienceFailed) {
+        this.stats.solelyExperienceReject++;
       }
     }
 
-    return true;
+    return isApproved;
   }
 
   /**

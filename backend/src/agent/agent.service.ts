@@ -74,7 +74,7 @@ export class AgentService implements OnApplicationBootstrap {
   ) {
     this.logger.log('[ORCHESTRATOR] Starting background job recommendation suite via BullMQ...');
 
-    const runId = `run-${Date.now()}`;
+    const runId = await this.db.getNextExecutionId();
     
     // Start run registration in coordinator
     this.coordinator.startRun(runId, this.activeUserId, searchTerms, locationSearch, 5);
