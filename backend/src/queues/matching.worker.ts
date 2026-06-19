@@ -45,8 +45,24 @@ export class MatchingWorker extends WorkerHost {
       this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Running Vector Search, Hard Filters, and matching algorithms for "${searchTerm}"...`);
 
       // Run Matching & Ranking engine against Qdrant
-      const rankedMatches = await this.matchingService.matchAndRankJobs(userId, limit);
-      this.logger.log(`[MATCHING-WORKER] Found ${rankedMatches.length} matching jobs under run ${runId}`);
+      const currentMatches = await this.matchingService.matchAndRankJobs(userId, limit);
+      this.logger.log(`[MATCHING-WORKER] Found ${currentMatches.length} matching jobs in current cycle under run ${runId}`);
+
+      // Merge and deduplicate matches across cycles/terms
+      const prevMatches = payload.accumulatedMatches || [];
+      const allMatchesMap = new Map<string, any>();
+      for (const match of prevMatches) {
+        if (match && match.job && match.job.jobId) {
+          allMatchesMap.set(match.job.jobId, match);
+        }
+      }
+      for (const match of currentMatches) {
+        if (match && match.job && match.job.jobId) {
+          allMatchesMap.set(match.job.jobId, match);
+        }
+      }
+      const rankedMatches = Array.from(allMatchesMap.values());
+      this.logger.log(`[MATCHING-WORKER] Total accumulated matching jobs under run ${runId}: ${rankedMatches.length}`);
       
       const meetsLimit = rankedMatches.length >= limit;
 

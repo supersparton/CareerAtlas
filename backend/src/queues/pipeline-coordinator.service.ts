@@ -22,6 +22,7 @@ export interface PipelineRun {
   totalJobs: number;
   processedJobs: number;
   status: PipelineStatus;
+  startTime?: number;
 }
 
 @Injectable()
@@ -76,6 +77,7 @@ export class PipelineCoordinatorService {
       totalJobs: 0,
       processedJobs: 0,
       status,
+      startTime: Date.now(),
     };
 
     this.runs.set(runId, run);
@@ -166,7 +168,10 @@ export class PipelineCoordinatorService {
     const run = this.runs.get(runId);
     if (run) {
       run.status.active = false;
-      this.addLog(runId, message);
+      const durationMs = run.startTime ? Date.now() - run.startTime : 0;
+      const durationSeconds = (durationMs / 1000).toFixed(2);
+      const timeMessage = `${message} (Took ${durationSeconds}s)`;
+      this.addLog(runId, timeMessage);
       
       // Mark all non-error steps as success upon workflow completion
       for (const stepId of Object.keys(run.status.steps)) {
@@ -175,7 +180,7 @@ export class PipelineCoordinatorService {
         }
       }
       
-      this.logger.log(`[PIPELINE-COORDINATOR] Run ${runId} marked as completed.`);
+      this.logger.log(`[PIPELINE-COORDINATOR] Run ${runId} marked as completed. Took ${durationSeconds}s.`);
     }
   }
 
@@ -186,7 +191,9 @@ export class PipelineCoordinatorService {
     const run = this.runs.get(runId);
     if (run) {
       run.status.active = false;
-      this.addLog(runId, `Workflow failed: ${errorMsg}`);
+      const durationMs = run.startTime ? Date.now() - run.startTime : 0;
+      const durationSeconds = (durationMs / 1000).toFixed(2);
+      this.addLog(runId, `Workflow failed: ${errorMsg} (Took ${durationSeconds}s)`);
       
       // Update any running steps to error
       for (const stepId of Object.keys(run.status.steps)) {
@@ -195,7 +202,7 @@ export class PipelineCoordinatorService {
           run.status.steps[stepId].errorDetails = errorMsg;
         }
       }
-      this.logger.error(`[PIPELINE-COORDINATOR] Run ${runId} failed: ${errorMsg}`);
+      this.logger.error(`[PIPELINE-COORDINATOR] Run ${runId} failed: ${errorMsg}. Took ${durationSeconds}s.`);
     }
   }
 }

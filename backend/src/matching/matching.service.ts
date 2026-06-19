@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DatabaseService } from '../vector-store/database.service';
 import { UserProfile } from '../profile/profile.service';
 import { JobRequirements } from '../intelligence/job-intelligence.service';
 import { Job } from '../discovery/discovery.service';
 import { QdrantService } from '../vector-store/qdrant.service';
+import { detectFamily, isAncestor } from './roleTaxonomy';
 
 export interface SkillScore {
   overlapSkills: string[];
@@ -234,6 +237,29 @@ ${this.stats.solelyExperienceReject}
     return sorted.slice(0, limit);
   }
 
+  private writeDetailedMatchLog(logText: string) {
+    try {
+      const workspaceRoot = process.cwd();
+      let rootDir = workspaceRoot;
+      if (fs.existsSync(path.join(workspaceRoot, 'backend'))) {
+        rootDir = workspaceRoot;
+      } else {
+        const parent = path.resolve(workspaceRoot, '..');
+        if (fs.existsSync(path.join(parent, 'backend'))) {
+          rootDir = parent;
+        }
+      }
+      const outputDir = path.join(rootDir, 'output');
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      const logFile = path.join(outputDir, 'matching_decisions.log');
+      fs.appendFileSync(logFile, logText + '\n', 'utf8');
+    } catch (err) {
+      // fallback
+    }
+  }
+
   private readonly roleAliases: { [key: string]: string[] } = {
     'software engineer': [
       'software engineer',
@@ -407,12 +433,55 @@ ${this.stats.solelyExperienceReject}
     const titleLower = jobTitle.toLowerCase();
     const descLower = jobDescription.toLowerCase();
 
-    // 1. Role / Search Term Filter using similarity matching
+    // 1. Role / Search Term Filter using role-family taxonomy and similarity fallback
     let titlePass = true;
     if (profile.preferredRoles && profile.preferredRoles.length > 0) {
       titlePass = profile.preferredRoles.some(role => {
-        const { score } = this.computeStringSimilarity(jobTitle, role);
-        return score >= 0.50;
+        const queryFamily = detectFamily(role);
+        const jobFamily = detectFamily(jobTitle);
+
+        let pass = false;
+        let reason = 'family_mismatch';
+
+        if (queryFamily && jobFamily) {
+          if (queryFamily === jobFamily) {
+            pass = true;
+            reason = 'same_family';
+          } else if (isAncestor(queryFamily, jobFamily)) {
+            pass = true;
+            reason = 'ancestor';
+          }
+        }
+
+        if (!pass) {
+          const { score } = this.computeStringSimilarity(jobTitle, role);
+          if (score >= 0.50) {
+            pass = true;
+            reason = 'similarity_match';
+          }
+        }
+
+        this.writeDetailedMatchLog(`
+User Preference:
+${role}
+
+Detected Family:
+${queryFamily || 'None'}
+
+Job Title:
+${jobTitle}
+
+Detected Family:
+${jobFamily || 'None'}
+
+Decision:
+${pass ? 'PASS' : 'REJECT'}
+
+Reason:
+${reason}
+`);
+
+        return pass;
       });
     }
 
@@ -477,7 +546,18 @@ ${this.stats.solelyExperienceReject}
 
     let remotePass = true;
     if (!isCandidateOpenToRemote && isJobRemote) {
-      remotePass = false;
+      // If the candidate prefers on-site/hybrid (remote: false), we only fail the remote check
+      // if the job does not have a physical location matching their preferred locations.
+      if (candidateLocations.length > 0) {
+        const normJobLoc = this.normalizeLocation(jobLocLower);
+        const hasPhysicalMatch = candidateLocations.some(prefLoc => {
+          const normPrefLoc = this.normalizeLocation(prefLoc);
+          return normJobLoc.includes(normPrefLoc) || normPrefLoc.includes(normJobLoc);
+        });
+        if (!hasPhysicalMatch) {
+          remotePass = false;
+        }
+      }
     }
 
     let locationPass = true;
@@ -553,7 +633,7 @@ ${this.stats.solelyExperienceReject}
       seniority = 'Mid';
     }
 
-    console.log(`
+    this.writeDetailedMatchLog(`
 ================================================
 Job
 title: ${jobTitle}
@@ -584,6 +664,8 @@ Reject Reasons
 ${rejectReasons.join('\n') || 'None'}
 ================================================
 `);
+
+    console.log(`[DECISION] ${isApproved ? 'ACCEPT' : 'REJECT'} | Reason: ${rejectReasons.join(', ') || 'None'} | Title: ${jobTitle}`);
 
     if (!isApproved) {
       if (!titlePass) this.stats.titleReject++;
