@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
-import { ChatGroq } from '@langchain/groq';
+import { QdrantService } from '../vector-store/qdrant.service';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { PromptTemplate } from '@langchain/core/prompts';
-import { StructuredOutputParser } from '@langchain/core/output_parsers';
-import * as _pdf from 'pdf-parse';
+import pdfParse from 'pdf-parse';
+import { Subject, Observable } from 'rxjs';
 
 export interface UserProfile {
   id?: number;
@@ -29,31 +30,42 @@ export interface ParsedProfile {
   fullName: string;
   email: string;
   phone: string;
+  education: string[];
   targetRole: string;
   coreSkills: string[];
   experienceLevel: string;
   preferences: string;
-  targetLocation: string;
-  isRemoteOpen: boolean;
-  experience: any[];
-  projects: any[];
-  education?: any[];
 }
 
 @Injectable()
 export class ProfileService {
   private readonly logger = new Logger(ProfileService.name);
-  private model: ChatGroq;
+  private readonly taskEvents = new Subject<{ taskId: string; status: 'running' | 'success' | 'error'; log: string; errorDetails?: string; profile?: UserProfile }>();
 
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
-  ) {
-    this.model = new ChatGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0,
-    });
+    private readonly qdrantService: QdrantService,
+    private readonly llmGatewayService: LlmGatewayService,
+  ) {}
+
+  emitTaskEvent(taskId: string | undefined, status: 'running' | 'success' | 'error', log: string, errorDetails?: string, profile?: UserProfile) {
+    if (taskId) {
+      this.taskEvents.next({ taskId, status, log, errorDetails, profile });
+    }
+  }
+
+  getTaskEventStream(taskId: string): Observable<{ taskId: string; status: 'running' | 'success' | 'error'; log: string; errorDetails?: string; profile?: UserProfile }> {
+    return this.taskEvents.asObservable();
+  }
+
+  async runBackgroundParse(taskId: string, pdfBuffer: Buffer): Promise<void> {
+    try {
+      const profile = await this.parseResumePdf(pdfBuffer, taskId);
+      this.emitTaskEvent(taskId, 'success', 'Profile parsing and vector indexing completed!', undefined, profile);
+    } catch (err) {
+      this.emitTaskEvent(taskId, 'error', `Parsing failed: ${err.message}`, err.message);
+    }
   }
 
   getProfile(): ParsedProfile | null {
@@ -70,72 +82,20 @@ export class ProfileService {
     return null;
   }
 
-  private async getProfileForSuggestions(): Promise<UserProfile | null> {
-    const raw = this.getProfile();
-    if (!raw) return null;
-    return {
-      fullName: raw.fullName,
-      email: raw.email,
-      skills: raw.coreSkills || [],
-      experienceYears: raw.experienceLevel?.toLowerCase().includes('senior') ? 6 : 2,
-      education: [],
-      projects: [],
-      achievements: [],
-      preferredRoles: raw.targetRole ? [raw.targetRole] : [],
-      preferences: {
-        locations: raw.targetLocation ? [raw.targetLocation] : [],
-        remote: raw.isRemoteOpen ?? true,
-        employmentTypes: ['Full-time'],
-      }
-    };
-  }
 
   async invokeModel(promptText: string): Promise<string> {
     return this.invokeModelWithFallback(promptText);
   }
 
 
-  private async invokeOllama(promptText: string): Promise<string> {
-    const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
-    const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
-    this.logger.log(`[PROFILE: LLM] Attempting local Ollama call with model "${ollamaModel}"...`);
-
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: promptText,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama failed with status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    return data.response;
-  }
-
   private async invokeModelWithFallback(promptText: string): Promise<string> {
-    const useOllama = process.env.USE_OLLAMA === 'true';
-
-    if (useOllama) {
-      try {
-        return await this.invokeOllama(promptText);
-      } catch (err) {
-        this.logger.warn(`[PROFILE: LLM] Local Ollama failed: ${err.message}. Falling back to standard API...`);
-      }
-    }
-
     try {
-      this.logger.log('[PROFILE: LLM] Invoking Groq model (Secondary)...');
-      const response = await this.model.invoke(promptText);
-      return response.content as string;
+      return await this.llmGatewayService.invokeLLM(async (model) => {
+        const response = await model.invoke(promptText);
+        return response.content as string;
+      });
     } catch (err) {
-      this.logger.error(`[PROFILE: LLM] Groq API exception: ${err.message}.`);
+      this.logger.error(`[PROFILE: LLM] All LLM providers/keys failed: ${err.message}`);
       throw err;
     }
   }
@@ -251,12 +211,13 @@ export class ProfileService {
     return cleaned;
   }
 
-  async parseResumePdf(pdfBuffer: Buffer): Promise<UserProfile> {
+  async parseResumePdf(pdfBuffer: Buffer, taskId?: string): Promise<UserProfile> {
+    this.emitTaskEvent(taskId, 'running', 'Extracting character streams from PDF resume...');
     this.logger.log('[PROFILE] Extracting text from PDF resume...');
     let pdfText = '';
     
     try {
-      const _pdfModule = _pdf as any;
+      const _pdfModule = pdfParse as any;
       
       // 1. Try modern pdf-parse v2 PDFParse class syntax
       if (_pdfModule && _pdfModule.PDFParse) {
@@ -306,6 +267,7 @@ export class ProfileService {
       throw new Error('PDF file appears to have no readable text content.');
     }
 
+    this.emitTaskEvent(taskId, 'running', 'Running AI LLM parsing agent on resume content...');
     this.logger.log('[PROFILE] Structuring resume content via LLM...');
 
     const prompt = `You are an elite talent acquisition AI. Parse the following raw text from a candidate's resume PDF and extract it into a structured format.
@@ -323,14 +285,10 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   "education": ["B.Tech in Computer Science, IIT Bombay, 2022"],
   "projects": ["Built autonomous recommendation engine using pgvector"],
   "achievements": ["Ranked 1st in national level hackathon"],
-  "preferredRoles": ["Software Engineer", "Backend Developer"],
-  "preferredLocations": [],
-  "remote": true,
-  "employmentTypes": ["Full-time"],
-  "salaryExpectation": null
+  "preferredRoles": ["Software Engineer", "Backend Developer"]
 }
 
-If any preference (such as preferredLocations or salaryExpectation or preferredRoles) is not explicitly mentioned in the resume text, you MUST return them as [] or null as shown above.Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.ALSO DO NOT ADD PREFFERED ROLES IF NOT EXPLICITLY MENTIONED IN THE RESUME.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
+Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
 
     try {
       const responseText = await this.invokeModelWithFallback(prompt);
@@ -357,13 +315,20 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         return [];
       };
 
+      const emailLower = String(parsedResult.email || '').trim().toLowerCase();
+      const existingProfile = await this.getProfileByEmail(emailLower);
+      console.log(`
+[TRACE] before_resume_upload:
+canonical_role: ${existingProfile ? JSON.stringify(existingProfile.preferredRoles) : 'None'}
+`);
+
       const skills = typeof parsedResult.skills === 'string'
         ? parsedResult.skills.split(',').map(s => s.trim()).filter(Boolean)
         : parseArray(parsedResult.skills);
 
       const profile: UserProfile = {
         fullName: String(parsedResult.fullName || '').trim(),
-        email: String(parsedResult.email || '').trim().toLowerCase(),
+        email: emailLower,
         phone: parsedResult.phone ? String(parsedResult.phone).trim() : undefined,
         skills,
         experienceYears: parseFloat(parsedResult.experienceYears) || 0,
@@ -372,22 +337,29 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         achievements: parseArray(parsedResult.achievements),
         preferredRoles: parseArray(parsedResult.preferredRoles),
         preferences: {
-          locations: parseArray(parsedResult.preferredLocations),
-          remote: typeof parsedResult.remote === 'boolean' ? parsedResult.remote : String(parsedResult.remote).toLowerCase() === 'true',
-          employmentTypes: parseArray(parsedResult.employmentTypes).length > 0 ? parseArray(parsedResult.employmentTypes) : ['Full-time'],
-          salaryExpectation: parsedResult.salaryExpectation ? parseInt(String(parsedResult.salaryExpectation), 10) : undefined,
+          locations: [],
+          remote: true,
+          employmentTypes: ['Full-time'],
         },
       };
 
       // Persist profile to the database
-      return await this.saveProfileToDb(profile);
+      this.emitTaskEvent(taskId, 'running', 'Saving structured user profile and preferences to database...');
+      const savedProfile = await this.saveProfileToDb(profile, taskId);
+      
+      console.log(`
+[TRACE] after_resume_upload:
+canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
+`);
+
+      return savedProfile;
     } catch (e) {
       this.logger.error(`[PROFILE] Structuring failed: ${e.message}`, e.stack);
       throw new Error(`Structuring failed: ${e.message}`);
     }
   }
 
-  async saveProfileToDb(profile: UserProfile): Promise<UserProfile> {
+  async saveProfileToDb(profile: UserProfile, taskId?: string): Promise<UserProfile> {
     this.logger.log(`[PROFILE] Saving profile to database for: ${profile.fullName} (${profile.email})...`);
     const client = await this.db.getPool().connect();
     
@@ -412,8 +384,8 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
 
       // 3. Insert into user_preferences
       await client.query(`
-        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years, education, projects, achievements)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `, [
         userId,
         profile.preferredRoles,
@@ -421,7 +393,10 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         profile.preferences.remote,
         profile.preferences.employmentTypes,
         profile.preferences.salaryExpectation || null,
-        Math.round(profile.experienceYears)
+        parseFloat(Number(profile.experienceYears || 0).toFixed(1)),
+        profile.education || [],
+        profile.projects || [],
+        profile.achievements || []
       ]);
 
       // 4. Insert skills
@@ -434,29 +409,41 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       }
 
       // 5. Generate User Embedding
-      // As per requirements: "User embedding should contain: Projects, Experience, Achievements, Education"
+      // As per requirements: "User embedding should contain: Projects, Experience, Achievements, Education, and Skills"
       const textToEmbed = [
         `Target Roles: ${profile.preferredRoles.join(', ')}`,
+        `Core Skills & Keywords: ${profile.skills.join(', ')}`,
         `Education: ${profile.education.join('. ')}`,
         `Projects: ${profile.projects.join('. ')}`,
         `Achievements: ${profile.achievements.join('. ')}`,
         `Experience Years: ${profile.experienceYears}`
       ].join('\n');
 
+      this.emitTaskEvent(taskId, 'running', 'Generating 384-dimensional vector embedding for candidate profile...');
       this.logger.log('[PROFILE] Generating User Embedding...');
       const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
 
-      // 6. Save embedding
-      const formattedVector = `[${embedding.join(',')}]`;
-      await client.query(`
-        INSERT INTO user_embeddings (user_id, embedding)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET embedding = EXCLUDED.embedding, created_at = CURRENT_TIMESTAMP
-      `, [userId, formattedVector]);
+      // 6. Save embedding to Qdrant vector database
+      this.emitTaskEvent(taskId, 'running', 'Indexing user embedding into Qdrant vector database...');
+      await this.qdrantService.getClient().upsert('user_embeddings', {
+        wait: true,
+        points: [
+          {
+            id: QdrantService.stringToUuid(userId.toString()),
+            vector: embedding,
+            payload: {
+              fullName: profile.fullName,
+              email: profile.email,
+              experienceYears: profile.experienceYears,
+              skills: profile.skills,
+              preferredRoles: profile.preferredRoles,
+            }
+          }
+        ]
+      });
 
       await client.query('COMMIT');
-      this.logger.log(`[PROFILE] User profile and embedding successfully stored in DB for user id: ${userId}`);
+      this.logger.log(`[PROFILE] User profile successfully stored in DB and embedding stored in Qdrant for user id: ${userId}`);
       return profile;
     } catch (err) {
       await client.query('ROLLBACK');
@@ -483,6 +470,9 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         employment_types: ['Full-time'],
         salary_expectation: null,
         experience_years: 0,
+        education: [],
+        projects: [],
+        achievements: [],
       };
 
       const skills = skillsRes.rows.map(r => r.skill);
@@ -494,9 +484,9 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
         phone: user.phone,
         skills,
         experienceYears: pref.experience_years,
-        education: [], // Populated from raw profile context if needed
-        projects: [],
-        achievements: [],
+        education: pref.education || [],
+        projects: pref.projects || [],
+        achievements: pref.achievements || [],
         preferredRoles: pref.preferred_roles,
         preferences: {
           locations: pref.locations,
@@ -522,19 +512,19 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
     }
   }
 
-  async suggestJobTitles(profile?: UserProfile): Promise<string[]> {
-    const activeProfile = profile || await this.getProfileForSuggestions();
-    if (!activeProfile) {
+  async suggestJobTitles(profile: UserProfile): Promise<string[]> {
+    if (!profile || !profile.email) {
       this.logger.warn('[PROFILE] Cannot suggest job titles: No active profile found.');
       return [];
     }
 
+    const activeProfile = profile;
     this.logger.log(`[PROFILE] Generating title suggestions for role: "${activeProfile.preferredRoles.join(', ')}"...`);
 
     const prompt = PromptTemplate.fromTemplate(`
-      You are an elite career advisor. Based on the candidate's preferences below, suggest 4 to 6 specific, standard, industry-common job title search terms to query job boards.
-      Focus on terms that match their skills and preferred roles(if found any from the profile). E.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", "Software Engineer".
-      Do NOT suggest rare, highly-specialized, or niche titles (such as "Agentic AI Developer", "Generative AI Engineer", "LLM Specialist") unless the candidate has extensive professional experience in those specific areas.
+      You are an elite career advisor. Based on the candidate's preferences below, suggest exactly 1 single, most relevant, specific, standard, industry-common job title search term to query job boards.
+      Focus on the single best term that matches their skills and preferred roles (e.g. "Full Stack Developer", "Backend Developer", "Node.js Developer", "React Developer", or "Software Engineer").
+      Do NOT suggest rare, highly-specialized, or niche titles unless the candidate has extensive professional experience in those specific areas.
       Do NOT suggest project names, specific technologies that are not job titles, or candidate achievements as search terms. Every suggestion MUST be a standard, widely-recognized job title.
       
       Candidate Profile:
@@ -542,7 +532,7 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       - Skills: {skills}
       - Experience Years: {experienceYears}
       
-      Respond ONLY with a JSON array of strings containing the job titles.
+      Respond ONLY with a JSON array of strings containing exactly 1 suggested job title (e.g. ["Software Engineer"]).
       Do not include any conversational filler, markdown code blocks, or schema definitions. Just return the valid JSON array of strings.
     `);
 
@@ -556,12 +546,25 @@ If any preference (such as preferredLocations or salaryExpectation or preferredR
       const responseText = await this.invokeModelWithFallback(formattedPrompt);
       const cleanedResponse = this.cleanJsonText(responseText);
       const parsed = JSON.parse(cleanedResponse);
+      let suggestions: string[] = [];
       if (Array.isArray(parsed)) {
-        return parsed.map(t => String(t).trim()).filter(Boolean);
+        suggestions = parsed.map(t => String(t).trim()).filter(Boolean);
+      } else {
+        suggestions = activeProfile.preferredRoles;
       }
-      return activeProfile.preferredRoles;
+      console.log(`
+[TRACE] after_suggestions:
+canonical_role: ${JSON.stringify(activeProfile.preferredRoles)}
+suggestions: ${JSON.stringify(suggestions)}
+`);
+      return suggestions;
     } catch (e) {
       this.logger.error(`[PROFILE] Failed to suggest titles: ${e.message}`);
+      console.log(`
+[TRACE] after_suggestions:
+canonical_role: ${JSON.stringify(activeProfile.preferredRoles)}
+suggestions: ${JSON.stringify(activeProfile.preferredRoles)}
+`);
       return activeProfile.preferredRoles;
     }
   }

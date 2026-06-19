@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../vector-store/database.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { QdrantService } from '../vector-store/qdrant.service';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { Job } from '../discovery/discovery.service';
-import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 
@@ -19,55 +20,24 @@ export interface JobRequirements {
 @Injectable()
 export class JobIntelligenceService {
   private readonly logger = new Logger(JobIntelligenceService.name);
-  private model: ChatGroq;
 
   constructor(
     private readonly db: DatabaseService,
     private readonly embeddingsService: EmbeddingsService,
-  ) {
-    this.model = new ChatGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0,
-    });
-  }
-
-  private async invokeOllama(promptText: string): Promise<string> {
-    const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
-    const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
-    
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: promptText,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama failed with status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    return data.response;
-  }
+    private readonly qdrantService: QdrantService,
+    private readonly llmGatewayService: LlmGatewayService,
+  ) {}
 
   private async invokeModelWithFallback(promptText: string): Promise<string> {
-    const useOllama = process.env.USE_OLLAMA === 'true';
-
-    if (useOllama) {
-      try {
-        return await this.invokeOllama(promptText);
-      } catch (err) {
-        this.logger.warn(`[JOB-INTEL: LLM] Local Ollama failed: ${err.message}. Falling back to standard API...`);
-      }
+    try {
+      return await this.llmGatewayService.invokeLLM(async (model) => {
+        const response = await model.invoke(promptText);
+        return response.content as string;
+      });
+    } catch (err) {
+      this.logger.error(`[JOB-INTEL: LLM] All LLM providers/keys failed: ${err.message}`);
+      throw err;
     }
-
-    const response = await this.model.invoke(promptText);
-    return response.content as string;
   }
 
   private cleanJsonText(text: string): string {
@@ -173,15 +143,76 @@ export class JobIntelligenceService {
     return cleaned;
   }
 
+  static inferExperienceFromText(title: string, description: string): number {
+    const titleLower = title.toLowerCase();
+    const textToScan = (title + ' ' + description).toLowerCase();
+
+    // 1. Principal / Architect / VP / Director / IC5 / IC6 / L7 / L8
+    if (
+      /\b(principal|architect|director|vp|head|vice president|ic5|ic6|l7|l8)\b/i.test(titleLower) ||
+      /\b(career level - ic5|career level - ic6|level 7|level 8)\b/i.test(textToScan)
+    ) {
+      return 8;
+    }
+    
+    // 2. Lead / Staff / Manager / IC4 / L6
+    if (
+      /\b(lead|manager|staff|engineering lead|tech lead|ic4|l6)\b/i.test(titleLower) ||
+      /\b(career level - ic4|level 6)\b/i.test(textToScan)
+    ) {
+      return 6;
+    }
+    
+    // 3. Senior / SDE 3 / SDE III / IC3 / L5 / Developer 3
+    if (
+      /\b(senior|sr\b|sr\.|\biii\b|sde 3|sde iii|sde-3|sde-iii|developer 3|ic3|l5)\b/i.test(titleLower) ||
+      /\b(career level - ic3|level 5)\b/i.test(textToScan)
+    ) {
+      return 5;
+    }
+    
+    // 4. Mid-Level / SDE 2 / SDE II / IC2 / L4 / Developer 2
+    if (
+      /\b(mid|intermediate|sde 2|sde ii|sde-2|sde-ii|developer 2|ic2|l4)\b/i.test(titleLower) ||
+      /\b(career level - ic2|level 4)\b/i.test(textToScan)
+    ) {
+      return 2;
+    }
+    
+    // 5. Fresher / Entry-Level / Intern / SDE 1 / SDE I / IC1 / L3 / Developer 1
+    if (
+      /\b(intern|internship|fresher|entry level|associate|graduate|trainee|sde 1|sde i|sde-1|sde-i|developer 1|ic1|l3)\b/i.test(titleLower) ||
+      /\b(career level - ic1|level 3)\b/i.test(textToScan)
+    ) {
+      return 0;
+    }
+
+    // Default: scan for explicit years of experience mentioned
+    const yearsMatch = textToScan.match(/\b(\d+)\s*\+?\s*years?\s+(?:of\s+)?experience\b/i);
+    if (yearsMatch) {
+      return parseInt(yearsMatch[1], 10);
+    }
+
+    return 0;
+  }
+
   /**
-   * Processes a job posting: Extracts metadata, generates embedding, and stores in database.
-   * If job already exists, returns cached data.
+   * Extracts job requirements and structured metadata from the description using LLM.
+   * Checks cache (Qdrant) first.
    */
-  async processJob(job: Job): Promise<JobRequirements> {
+  async extractRequirements(job: Job): Promise<JobRequirements> {
     const existingReq = await this.getCachedRequirements(job.jobId);
     if (existingReq) {
       this.logger.log(`[JOB-INTEL] Cache hit. Skipping extraction for job ID: ${job.jobId}`);
       return existingReq;
+    }
+
+    // Try fetching full description from URL first if not already enriched by ScrapingWorker
+    if (!job.description || job.description.length < 500) {
+      const fullDescription = await this.fetchFullDescription(job.applyUrl);
+      if (fullDescription) {
+        job.description = fullDescription;
+      }
     }
 
     this.logger.log(`[JOB-INTEL] Extracting structured requirements for "${job.title}" at "${job.company}"...`);
@@ -226,10 +257,13 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         return [];
       };
 
+      // Infer required experience from title/description conventions
+      const inferredYears = JobIntelligenceService.inferExperienceFromText(job.title, job.description);
+
       const reqs: JobRequirements = {
         requiredSkills: parseArray(parsed.requiredSkills),
         preferredSkills: parseArray(parsed.preferredSkills),
-        experienceRequired: parseFloat(parsed.experienceRequired) || 0,
+        experienceRequired: Math.max(parseFloat(parsed.experienceRequired) || 0, inferredYears),
         educationRequirements: parseArray(parsed.educationRequirements),
         employmentType: String(parsed.employmentType || 'Full-time').trim(),
         remoteAllowed: typeof parsed.remoteAllowed === 'boolean' ? parsed.remoteAllowed : String(parsed.remoteAllowed).toLowerCase() === 'true',
@@ -247,23 +281,18 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         })(),
       };
 
-      // Generate job description embedding
-      const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${reqs.location}\nRequired Skills: ${reqs.requiredSkills.join(', ')}\nDescription: ${job.description}`;
-      this.logger.log(`[JOB-INTEL] Generating Job Embedding for ID: ${job.jobId}`);
-      const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
-
-      // Save to database
-      await this.saveJobToDb(job, reqs, embedding);
-
       return reqs;
     } catch (err) {
       this.logger.error(`[JOB-INTEL] Failed to extract requirements for job ${job.jobId}: ${err.message}`, err.stack);
       
+      // Infer required experience for the fallback block
+      const inferredYears = JobIntelligenceService.inferExperienceFromText(job.title, job.description);
+
       // Fallback defaults to prevent pipeline crash
       const fallbackReqs: JobRequirements = {
         requiredSkills: [],
         preferredSkills: [],
-        experienceRequired: 0,
+        experienceRequired: inferredYears,
         educationRequirements: [],
         employmentType: 'Full-time',
         remoteAllowed: /remote|hybrid/i.test(job.location + job.description),
@@ -274,84 +303,172 @@ Do not include any conversational filler, explanation, or markdown formatting (s
         })(),
       };
 
-      try {
-        const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nDescription: ${job.description}`;
-        const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
-        await this.saveJobToDb(job, fallbackReqs, embedding);
-      } catch (saveErr) {
-        this.logger.error(`[JOB-INTEL] Failed to save fallback job details to DB: ${saveErr.message}`);
-      }
-
       return fallbackReqs;
     }
   }
 
-  private async getCachedRequirements(jobId: string): Promise<JobRequirements | null> {
-    try {
-      const res = await this.db.query('SELECT * FROM job_requirements WHERE job_id = $1', [jobId]);
-      if (res.rows.length === 0) return null;
+  /**
+   * Processes a job posting: Extracts metadata, generates embedding, and stores in database.
+   * If job already exists, returns cached data.
+   */
+  async processJob(job: Job): Promise<JobRequirements> {
+    const reqs = await this.extractRequirements(job);
 
-      const row = res.rows[0];
+    // Generate job description embedding
+    try {
+      const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${reqs.location}\nRequired Skills: ${reqs.requiredSkills.join(', ')}\nDescription: ${job.description}`;
+      this.logger.log(`[JOB-INTEL] Generating Job Embedding for ID: ${job.jobId}`);
+      const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
+
+      // Save to database
+      await this.saveJobToDb(job, reqs, embedding);
+    } catch (err) {
+      this.logger.error(`[JOB-INTEL] Failed to generate/save embedding for job ${job.jobId}: ${err.message}`);
+    }
+
+    return reqs;
+  }
+
+  async getCachedRequirements(jobId: string): Promise<JobRequirements | null> {
+    try {
+      const uuid = QdrantService.stringToUuid(jobId);
+      const res = await this.qdrantService.getClient().retrieve('job_embeddings', {
+        ids: [uuid],
+        with_payload: true,
+        with_vector: false,
+      });
+
+      if (res.length === 0) return null;
+      const payload = res[0].payload as any;
+      if (!payload) return null;
+
       return {
-        requiredSkills: row.required_skills,
-        preferredSkills: row.preferred_skills,
-        experienceRequired: row.experience_required,
-        educationRequirements: row.education_requirements,
-        employmentType: row.employment_type,
-        remoteAllowed: row.remote_allowed,
-        location: row.actual_location,
+        requiredSkills: payload.requiredSkills || [],
+        preferredSkills: payload.preferredSkills || [],
+        experienceRequired: payload.experienceRequired || 0,
+        educationRequirements: payload.educationRequirements || [],
+        employmentType: payload.employmentType || 'Full-time',
+        remoteAllowed: !!payload.remoteAllowed,
+        location: payload.location || 'Remote',
       };
     } catch (err) {
-      this.logger.error(`[JOB-INTEL] DB error checking cached requirements: ${err.message}`);
+      this.logger.error(`[JOB-INTEL] Qdrant error checking cached requirements: ${err.message}`);
       return null;
     }
   }
 
-  private async saveJobToDb(job: Job, reqs: JobRequirements, embedding: number[]) {
-    const client = await this.db.getPool().connect();
+  async saveJobToDb(job: Job, reqs: JobRequirements, embedding: number[]) {
     try {
-      await client.query('BEGIN');
-
-      // 1. Insert into jobs table using resolved location
-      await client.query(`
-        INSERT INTO jobs (id, title, company, url, description, location, posting_date)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id) DO UPDATE 
-        SET title = EXCLUDED.title, company = EXCLUDED.company, description = EXCLUDED.description, location = EXCLUDED.location
-      `, [job.jobId, job.title, job.company, job.applyUrl, job.description, reqs.location, new Date()]);
-
-      // 2. Insert into job_requirements table
-      await client.query(`
-        INSERT INTO job_requirements (job_id, required_skills, preferred_skills, experience_required, education_requirements, employment_type, remote_allowed, actual_location)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (job_id) DO UPDATE 
-        SET required_skills = EXCLUDED.required_skills, preferred_skills = EXCLUDED.preferred_skills, experience_required = EXCLUDED.experience_required, education_requirements = EXCLUDED.education_requirements, employment_type = EXCLUDED.employment_type, remote_allowed = EXCLUDED.remote_allowed, actual_location = EXCLUDED.actual_location
-      `, [
-        job.jobId,
-        reqs.requiredSkills,
-        reqs.preferredSkills,
-        Math.round(reqs.experienceRequired),
-        reqs.educationRequirements,
-        reqs.employmentType,
-        reqs.remoteAllowed,
-        reqs.location
-      ]);
-
-      // 3. Insert into job_embeddings
-      const formattedVector = `[${embedding.join(',')}]`;
-      await client.query(`
-        INSERT INTO job_embeddings (job_id, embedding)
-        VALUES ($1, $2)
-        ON CONFLICT (job_id) DO UPDATE 
-        SET embedding = EXCLUDED.embedding, created_at = CURRENT_TIMESTAMP
-      `, [job.jobId, formattedVector]);
-
-      await client.query('COMMIT');
+      const uuid = QdrantService.stringToUuid(job.jobId);
+      await this.qdrantService.getClient().upsert('job_embeddings', {
+        wait: true,
+        points: [
+          {
+            id: uuid,
+            vector: embedding,
+            payload: {
+              jobId: job.jobId,
+              title: job.title,
+              company: job.company,
+              url: job.applyUrl,
+              description: job.description,
+              location: reqs.location,
+              postingDate: new Date().toISOString(),
+              requiredSkills: reqs.requiredSkills,
+              preferredSkills: reqs.preferredSkills,
+              experienceRequired: reqs.experienceRequired,
+              educationRequirements: reqs.educationRequirements,
+              employmentType: reqs.employmentType,
+              remoteAllowed: reqs.remoteAllowed,
+            }
+          }
+        ]
+      });
+      this.logger.log(`[JOB-INTEL] Job ${job.jobId} and embedding successfully stored in Qdrant.`);
     } catch (err) {
-      await client.query('ROLLBACK');
+      this.logger.error(`[JOB-INTEL] Failed to save job details to Qdrant: ${err.message}`);
       throw err;
-    } finally {
-      client.release();
+    }
+  }
+
+  private async fetchFullDescription(url: string): Promise<string | null> {
+    if (!url) return null;
+    try {
+      this.logger.log(`[JOB-INTEL] Fetching full job description page from: ${url}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en',
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        this.logger.warn(`[JOB-INTEL] Direct fetch failed with status: ${response.status} for ${url}`);
+        return null;
+      }
+
+      const html = await response.text();
+      
+      // Strip script and style tags completely
+      let cleanText = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+      cleanText = cleanText.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+      
+      // Try to target common job description elements for popular platforms to reduce noise
+      let matchedText = '';
+      
+      // Lever
+      if (url.includes('lever.co')) {
+        const leverMatch = cleanText.match(/<div class="section-wrapper"[\s\S]*?<\/div>[\s\S]*?<\/div>/i)
+                     || cleanText.match(/<div class="sectionpage page-full"[\s\S]*?<\/div>/i);
+        if (leverMatch) matchedText = leverMatch[0];
+      }
+      // Greenhouse
+      else if (url.includes('greenhouse.io')) {
+        const ghMatch = cleanText.match(/<div id="content"[\s\S]*?<\/div>/i);
+        if (ghMatch) matchedText = ghMatch[0];
+      }
+      // Ashby
+      else if (url.includes('ashbyhq.com')) {
+        const ashbyMatch = cleanText.match(/<div class="_description_[\s\S]*?<\/div>/i);
+        if (ashbyMatch) matchedText = ashbyMatch[0];
+      }
+      // LinkedIn public job details
+      else if (url.includes('linkedin.com')) {
+        const liMatch = cleanText.match(/<div class="show-more-less-html__markup[\s\S]*?<\/div>/i)
+                     || cleanText.match(/<section class="show-more-less-html"[\s\S]*?<\/section>/i)
+                     || cleanText.match(/<div class="description__text[\s\S]*?<\/div>/i);
+        if (liMatch) matchedText = liMatch[0];
+      }
+
+      if (!matchedText) {
+        // Fallback: Use body content if no specific container matches
+        const bodyMatch = cleanText.match(/<body[\s\S]*?<\/body>/i);
+        matchedText = bodyMatch ? bodyMatch[0] : cleanText;
+      }
+
+      // Strip all HTML tags
+      cleanText = matchedText.replace(/<[^>]*>/g, ' ');
+      
+      // Clean up whitespace
+      cleanText = cleanText.replace(/\s+/g, ' ').trim();
+      
+      if (cleanText.length > 200) {
+        this.logger.log(`[JOB-INTEL] Successfully fetched and parsed ${cleanText.length} characters of description text.`);
+        return cleanText;
+      }
+
+      return null;
+    } catch (err: any) {
+      this.logger.warn(`[JOB-INTEL] Failed to scrape job description: ${err.message}`);
+      return null;
     }
   }
 }

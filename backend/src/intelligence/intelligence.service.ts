@@ -1,10 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChatGroq } from '@langchain/groq';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 import { Job } from '../discovery/discovery.service';
-import { ParsedProfile as UserProfile } from '../agent/profile.service';
-import * as path from 'path';
+import { ParsedProfile as UserProfile } from '../profile/profile.service';
 
 export interface JobScore {
   isFakeOrSpam: boolean;
@@ -20,73 +19,19 @@ export interface JobScore {
 @Injectable()
 export class IntelligenceService {
   private readonly logger = new Logger(IntelligenceService.name);
-  private model: ChatGroq;
 
-  constructor() {
-    this.model = new ChatGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0,
-    });
-  }
-
-  private async invokeOllama(promptText: string): Promise<string> {
-    const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
-    const ollamaModel = process.env.OLLAMA_MODEL || 'llama3';
-    this.logger.log(`[LLM: SCORER] Attempting local Ollama call with model "${ollamaModel}"...`);
-
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: promptText,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Ollama failed with status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    const text = data.response;
-    if (!text) {
-      throw new Error('Ollama returned empty response');
-    }
-    this.logger.log('[LLM: SCORER] Ollama call succeeded.');
-    return text;
-  }
+  constructor(
+    private readonly llmGatewayService: LlmGatewayService,
+  ) {}
 
   private async invokeModelWithFallback(promptText: string): Promise<string> {
-    const useOllama = process.env.USE_OLLAMA === 'true';
-
-    if (useOllama) {
-      try {
-        return await this.invokeOllama(promptText);
-      } catch (err) {
-        this.logger.warn(`[LLM: SCORER] Local Ollama failed: ${err.message}. Falling back to standard API chain...`);
-      }
-    }
-
-    // Secondary provider: Groq
     try {
-      this.logger.log('[LLM: SCORER] Invoking Groq model (Secondary)...');
-      const response = await this.model.invoke(promptText);
-      return response.content as string;
+      return await this.llmGatewayService.invokeLLM(async (model) => {
+        const response = await model.invoke(promptText);
+        return response.content as string;
+      });
     } catch (err) {
-      this.logger.warn(`[LLM: SCORER] Groq API exception: ${err.message}.`);
-      if (!useOllama) {
-        this.logger.log('[LLM: SCORER] Attempting local Ollama as final fallback...');
-        try {
-          return await this.invokeOllama(promptText);
-        } catch (ollamaErr) {
-          this.logger.error(`[LLM: SCORER] Final Ollama fallback also failed: ${ollamaErr.message}`);
-        }
-      }
+      this.logger.error(`[LLM: SCORER] All LLM providers/keys failed: ${err.message}`);
       throw err;
     }
   }
@@ -128,7 +73,7 @@ export class IntelligenceService {
     });
 
     const formatInstructions = parser.getFormatInstructions();
-    const activeLoc = activeSearchLocation || userProfile.targetLocation || 'Remote';
+    const activeLoc = activeSearchLocation || 'Remote';
 
     const prompt = PromptTemplate.fromTemplate(`
       You are an elite career agent. Evaluate this job posting against the user's profile and current search parameters.

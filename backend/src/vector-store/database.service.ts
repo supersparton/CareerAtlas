@@ -63,9 +63,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try {
       await client.query('BEGIN');
 
-      // Enable pgvector extension
-      await client.query('CREATE EXTENSION IF NOT EXISTS vector');
-      
       // 1. Create users table
       await client.query(`
         CREATE TABLE IF NOT EXISTS users (
@@ -86,8 +83,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           remote BOOLEAN NOT NULL,
           employment_types TEXT[] NOT NULL,
           salary_expectation INTEGER,
-          experience_years INTEGER NOT NULL
+          experience_years NUMERIC(3,1) NOT NULL,
+          education TEXT[] DEFAULT '{}',
+          projects TEXT[] DEFAULT '{}',
+          achievements TEXT[] DEFAULT '{}'
         );
+      `);
+
+      // Ensure new columns and types exist for existing tables
+      await client.query(`
+        ALTER TABLE user_preferences ALTER COLUMN experience_years TYPE NUMERIC(3,1);
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS education TEXT[] DEFAULT '{}';
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS projects TEXT[] DEFAULT '{}';
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS achievements TEXT[] DEFAULT '{}';
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS latest_run_id VARCHAR(255);
       `);
 
       // 3. Create user skills table
@@ -99,56 +108,38 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
       `);
 
-      // 4. Create user embeddings table (384 dimensions for bge-small)
+      // 4. Create results table for user-specific recommendations
       await client.query(`
-        CREATE TABLE IF NOT EXISTS user_embeddings (
-          user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          embedding vector(384) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      // 5. Create jobs table
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS jobs (
-          id VARCHAR(50) PRIMARY KEY,
-          title VARCHAR(255) NOT NULL,
+        CREATE TABLE IF NOT EXISTS results (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          job_id VARCHAR(255) NOT NULL,
           company VARCHAR(255) NOT NULL,
-          url TEXT NOT NULL,
-          description TEXT NOT NULL,
+          title VARCHAR(255) NOT NULL,
           location VARCHAR(255) NOT NULL,
-          posting_date TIMESTAMP NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          source VARCHAR(100) NOT NULL,
+          url TEXT,
+          score INTEGER NOT NULL,
+          reasoning TEXT,
+          status VARCHAR(50) DEFAULT 'matched',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (user_id, job_id)
         );
       `);
 
-      // 6. Create job requirements table
+      // Ensure url column exists in case table was created previously without it
       await client.query(`
-        CREATE TABLE IF NOT EXISTS job_requirements (
-          job_id VARCHAR(50) PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
-          required_skills TEXT[] NOT NULL,
-          preferred_skills TEXT[] NOT NULL,
-          experience_required INTEGER NOT NULL,
-          education_requirements TEXT[] NOT NULL,
-          employment_type VARCHAR(100) NOT NULL,
-          remote_allowed BOOLEAN NOT NULL,
-          actual_location VARCHAR(255) NOT NULL
-        );
+        ALTER TABLE results ADD COLUMN IF NOT EXISTS url TEXT;
       `);
 
-      // 7. Create job embeddings table (384 dimensions for bge-small)
+      // Ensure run_id column exists
       await client.query(`
-        CREATE TABLE IF NOT EXISTS job_embeddings (
-          job_id VARCHAR(50) PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
-          embedding vector(384) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        ALTER TABLE results ADD COLUMN IF NOT EXISTS run_id VARCHAR(255);
       `);
 
-      // 8. Create HNSW indexes for cosine distance search speedup
+      // 5. Create sequence for run IDs
       await client.query(`
-        CREATE INDEX IF NOT EXISTS job_embeddings_vector_idx 
-        ON job_embeddings USING hnsw (embedding vector_cosine_ops);
+        CREATE SEQUENCE IF NOT EXISTS workflow_run_id_seq START WITH 1;
       `);
 
       await client.query('COMMIT');
@@ -159,6 +150,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       throw err;
     } finally {
       client.release();
+    }
+  }
+
+  async getNextExecutionId(): Promise<string> {
+    try {
+      const res = await this.query("SELECT nextval('workflow_run_id_seq') as val");
+      const num = res.rows[0].val;
+      return `run_${String(num).padStart(4, '0')}`;
+    } catch (err) {
+      this.logger.error(`[DATABASE] Failed to get next run sequence: ${err.message}`);
+      return `run_${Date.now()}`;
     }
   }
 }

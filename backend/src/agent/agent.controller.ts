@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus, Logger, Query } from '@nestjs/common';
 import { AgentService } from './agent.service';
 
 export interface StartWorkflowDto {
@@ -21,6 +21,11 @@ export class AgentController {
   @Get('agent/status')
   getAgentStatus() {
     return this.agentService.getPipelineStatus();
+  }
+
+  @Get('agent/results')
+  async getAgentResults(@Query('email') email?: string) {
+    return this.agentService.getWorkflowResults(email);
   }
 
   // Trigger the job search scraper workflow in the background
@@ -69,5 +74,12 @@ export class AgentController {
       message: 'Job search workflow triggered in the background.',
       searchTerms,
     };
+  }
+
+  @Post('agent/clear')
+  @HttpCode(HttpStatus.OK)
+  async clearHistory(@Body('email') email?: string) {
+    await this.agentService.clearHistory(email);
+    return { message: 'History and cache successfully cleared.' };
   }
 }
