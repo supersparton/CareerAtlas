@@ -53,7 +53,6 @@ export default function Home() {
   const [locationPref, setLocationPref] = useState<string>("Ahmedabad");
   const [isRemoteOpen, setIsRemoteOpen] = useState<boolean>(true);
   const [employmentTypes, setEmploymentTypes] = useState<string[]>(["Full-time"]);
-  const [salaryExpectation, setSalaryExpectation] = useState<string>("");
   
   interface JobResult {
     id: number;
@@ -159,9 +158,6 @@ export default function Home() {
           if (data.preferences?.employmentTypes && data.preferences.employmentTypes.length > 0) {
             setEmploymentTypes(data.preferences.employmentTypes);
           }
-          if (data.preferences?.salaryExpectation !== undefined && data.preferences?.salaryExpectation !== null) {
-            setSalaryExpectation(String(data.preferences.salaryExpectation));
-          }
           addLog("Loaded existing profile from backend cache.");
           fetchSuggestions(data.email);
           fetchResults(data.email);
@@ -220,9 +216,6 @@ export default function Home() {
             setIsRemoteOpen(parsedData.isRemoteOpen ?? true);
             if (parsedData.preferences?.employmentTypes && parsedData.preferences.employmentTypes.length > 0) {
               setEmploymentTypes(parsedData.preferences.employmentTypes);
-            }
-            if (parsedData.preferences?.salaryExpectation !== undefined && parsedData.preferences?.salaryExpectation !== null) {
-              setSalaryExpectation(String(parsedData.preferences.salaryExpectation));
             }
             addLog(`Resume parsed successfully for ${parsedData.fullName}!`);
             
@@ -309,7 +302,7 @@ export default function Home() {
           isRemoteOpen,
           userEmail: profile?.email,
           employmentTypes,
-          salaryExpectation: salaryExpectation ? parseInt(salaryExpectation, 10) : null,
+          salaryExpectation: null,
         }),
       });
 
@@ -495,57 +488,37 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Employment & Compensation */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
-                      Employment Type Preference
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {["Full-time", "Part-time", "Contract", "Internship"].map((type) => {
-                        const isSelected = employmentTypes.includes(type);
-                        return (
-                          <button
-                            key={type}
-                            type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                if (employmentTypes.length > 1) {
-                                  setEmploymentTypes(employmentTypes.filter(t => t !== type));
-                                }
-                              } else {
-                                setEmploymentTypes([...employmentTypes, type]);
+                {/* Employment Preference */}
+                <div className="bg-zinc-950/20 border border-zinc-900 rounded-xl p-4">
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                    Employment Type Preference
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {["Full-time", "Part-time", "Contract", "Internship"].map((type) => {
+                      const isSelected = employmentTypes.includes(type);
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (employmentTypes.length > 1) {
+                                setEmploymentTypes(employmentTypes.filter(t => t !== type));
                               }
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                              isSelected
-                                ? "bg-emerald-500/15 border-emerald-500 text-emerald-400"
-                                : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700"
-                            }`}
-                          >
-                            {type}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
-                      Salary Expectation (Annual)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={salaryExpectation}
-                        onChange={(e) => setSalaryExpectation(e.target.value)}
-                        placeholder="e.g. 1200000"
-                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-4 pr-24 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
-                      />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
-                        INR / Year
-                      </span>
-                    </div>
+                            } else {
+                              setEmploymentTypes([...employmentTypes, type]);
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                            isSelected
+                              ? "bg-emerald-500/15 border-emerald-500 text-emerald-400"
+                              : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                          }`}
+                        >
+                          {type}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

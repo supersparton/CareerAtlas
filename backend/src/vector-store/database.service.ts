@@ -82,7 +82,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           locations TEXT[] NOT NULL,
           remote BOOLEAN NOT NULL,
           employment_types TEXT[] NOT NULL,
-          salary_expectation INTEGER,
           experience_years NUMERIC(3,1) NOT NULL,
           education TEXT[] DEFAULT '{}',
           projects TEXT[] DEFAULT '{}',

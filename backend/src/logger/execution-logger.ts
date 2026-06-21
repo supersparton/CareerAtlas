@@ -139,4 +139,30 @@ if (typeof process !== 'undefined') {
     const stack = reason instanceof Error ? reason.stack : undefined;
     logger.error(runId, `Unhandled Rejection: ${msg}`, { stack });
   });
+
+  // Clear/truncate all log files in the output folder on server startup
+  try {
+    const cwd = process.cwd();
+    let workspaceRoot = cwd;
+    if (fs.existsSync(path.join(cwd, 'backend'))) {
+      workspaceRoot = cwd;
+    } else {
+      const parent = path.resolve(cwd, '..');
+      if (fs.existsSync(path.join(parent, 'backend'))) {
+        workspaceRoot = parent;
+      }
+    }
+    const outputDir = path.join(workspaceRoot, 'output');
+    if (fs.existsSync(outputDir)) {
+      const files = fs.readdirSync(outputDir);
+      for (const file of files) {
+        if (file.endsWith('.log')) {
+          const filePath = path.join(outputDir, file);
+          fs.writeFileSync(filePath, '', 'utf8');
+        }
+      }
+    }
+  } catch (e) {
+    // Safe fallback if files are locked or inaccessible
+  }
 }

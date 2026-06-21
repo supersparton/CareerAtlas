@@ -7,7 +7,6 @@ export interface StartWorkflowDto {
   isRemoteOpen: boolean;
   userEmail?: string;
   employmentTypes?: string[];
-  salaryExpectation?: number;
 }
 
 @Controller('api')
@@ -41,7 +40,6 @@ export class AgentController {
     const isRemoteOpen = body.isRemoteOpen ?? true;
     const userEmail = body.userEmail;
     const employmentTypes = body.employmentTypes || ['Full-time'];
-    const salaryExpectation = body.salaryExpectation !== undefined ? body.salaryExpectation : null;
 
     let locationSearch = `"${locationPref}"`;
     if (isRemoteOpen && locationPref.toLowerCase() !== 'remote') {
@@ -62,7 +60,6 @@ export class AgentController {
           isRemoteOpen,
           userEmail,
           employmentTypes,
-          salaryExpectation,
         );
         this.logger.log('[BACKGROUND AGENT] Finished all run cycles.');
       } catch (err) {
