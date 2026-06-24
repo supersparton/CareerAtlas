@@ -22,7 +22,6 @@ export interface UserProfile {
     locations: string[];
     remote: boolean;
     employmentTypes: string[];
-    salaryExpectation?: number;
   };
 }
 
@@ -384,15 +383,14 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
 
       // 3. Insert into user_preferences
       await client.query(`
-        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years, education, projects, achievements)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, experience_years, education, projects, achievements)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [
         userId,
         profile.preferredRoles,
         profile.preferences.locations,
         profile.preferences.remote,
         profile.preferences.employmentTypes,
-        profile.preferences.salaryExpectation || null,
         parseFloat(Number(profile.experienceYears || 0).toFixed(1)),
         profile.education || [],
         profile.projects || [],
@@ -468,7 +466,6 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
         locations: [],
         remote: true,
         employment_types: ['Full-time'],
-        salary_expectation: null,
         experience_years: 0,
         education: [],
         projects: [],
@@ -492,7 +489,6 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
           locations: pref.locations,
           remote: pref.remote,
           employmentTypes: pref.employment_types,
-          salaryExpectation: pref.salary_expectation || undefined,
         },
       };
     } catch (err) {

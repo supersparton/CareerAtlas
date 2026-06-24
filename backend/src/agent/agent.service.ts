@@ -70,7 +70,6 @@ export class AgentService implements OnApplicationBootstrap {
     isRemoteOpen: boolean,
     userEmail?: string,
     employmentTypes?: string[],
-    salaryExpectation?: number | null
   ) {
     this.logger.log('[ORCHESTRATOR] Starting background job recommendation suite via BullMQ...');
 
@@ -102,30 +101,27 @@ export class AgentService implements OnApplicationBootstrap {
           profile.preferences.locations = [locationPref];
           profile.preferences.remote = isRemoteOpen;
           profile.preferences.employmentTypes = employmentTypes || ['Full-time'];
-          profile.preferences.salaryExpectation = salaryExpectation ?? undefined;
 
           // saveProfileToDb updates SQL tables AND updates the Qdrant user_embeddings collection
           await this.profileService.saveProfileToDb(profile);
-          this.logger.log(`[ORCHESTRATOR] Synchronized runtime preferences and regenerated Qdrant embeddings for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}, employmentTypes=${JSON.stringify(employmentTypes)}, salaryExpectation=${salaryExpectation}`);
+          this.logger.log(`[ORCHESTRATOR] Synchronized runtime preferences and regenerated Qdrant embeddings for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}, employmentTypes=${JSON.stringify(employmentTypes)}`);
           this.coordinator.addLog(runId, `Runtime preferences and Qdrant vector embeddings synchronized for User ID ${resolvedUserId}.`);
         } else {
           // Fallback SQL upsert if no parsed profile exists yet
           await this.db.query(`
-            INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, salary_expectation, experience_years)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO user_preferences (user_id, preferred_roles, locations, remote, employment_types, experience_years)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (user_id) DO UPDATE
             SET locations = EXCLUDED.locations,
                 remote = EXCLUDED.remote,
                 preferred_roles = EXCLUDED.preferred_roles,
-                employment_types = EXCLUDED.employment_types,
-                salary_expectation = EXCLUDED.salary_expectation;
+                employment_types = EXCLUDED.employment_types;
           `, [
             resolvedUserId,
             searchTerms,
             [locationPref],
             isRemoteOpen,
             employmentTypes || ['Full-time'],
-            salaryExpectation ?? null,
             0
           ]);
           this.logger.log(`[ORCHESTRATOR] SQL upsert fallback for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}`);

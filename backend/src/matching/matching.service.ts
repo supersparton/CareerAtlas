@@ -835,7 +835,6 @@ ${this.stats.solelyExperienceReject}
           locations: pref.locations,
           remote: pref.remote,
           employmentTypes: pref.employment_types,
-          salaryExpectation: pref.salary_expectation || undefined,
         },
       };
     } catch (err) {
