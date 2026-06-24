@@ -141,6 +141,75 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         CREATE SEQUENCE IF NOT EXISTS workflow_run_id_seq START WITH 1;
       `);
 
+      // 6. Create scraper_templates table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS scraper_templates (
+          id SERIAL PRIMARY KEY,
+          company_identifier VARCHAR(100) UNIQUE NOT NULL,
+          company_name VARCHAR(255) NOT NULL,
+          careers_url TEXT NOT NULL,
+          endpoint_url TEXT,
+          http_method VARCHAR(10) DEFAULT 'GET',
+          headers JSONB DEFAULT '{}',
+          body_template TEXT,
+          extraction_strategy VARCHAR(50) DEFAULT 'json',
+          polling_interval INTEGER DEFAULT 60,
+          monitoring_status VARCHAR(50) DEFAULT 'Unsupported',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 7. Create user_watchlists table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_watchlists (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          company_id INTEGER NOT NULL REFERENCES scraper_templates(id) ON DELETE CASCADE,
+          desired_roles TEXT[] DEFAULT '{}',
+          preferred_locations TEXT[] DEFAULT '{}',
+          keywords TEXT[] DEFAULT '{}',
+          notification_frequency VARCHAR(50) DEFAULT 'realtime',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, company_id)
+        );
+      `);
+
+      // 8. Create discovery_metadata table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS discovery_metadata (
+          id SERIAL PRIMARY KEY,
+          company_identifier VARCHAR(100) NOT NULL,
+          careers_url TEXT NOT NULL,
+          request_url TEXT NOT NULL,
+          method VARCHAR(10) NOT NULL,
+          headers JSONB DEFAULT '{}',
+          payload TEXT,
+          response_body TEXT,
+          content_type VARCHAR(100),
+          confidence_score INTEGER DEFAULT 0,
+          classification VARCHAR(100) DEFAULT 'Unsupported',
+          is_monitored_server_side BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 9. Create monitored_jobs table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS monitored_jobs (
+          id SERIAL PRIMARY KEY,
+          company_id INTEGER NOT NULL REFERENCES scraper_templates(id) ON DELETE CASCADE,
+          job_external_id VARCHAR(255) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          location VARCHAR(255),
+          url TEXT,
+          payload_hash VARCHAR(64) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (company_id, job_external_id)
+        );
+      `);
+
       await client.query('COMMIT');
       this.logger.log('[DATABASE] Database schema initialized successfully.');
     } catch (err) {

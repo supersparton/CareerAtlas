@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CareerOS Watcher</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      min-height: 480px;
+      background: #0a0a0f;
+      color: #e4e4e7;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      font-size: 13px;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1a1a2e 100%);
+      border-bottom: 1px solid #1c1c2e;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-logo { font-size: 18px; }
+    .header-title { font-size: 13px; font-weight: 700; color: #fff; }
+    .header-sub { font-size: 9px; color: #52525b; margin-top: 1px; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ef4444; margin-left: auto; flex-shrink: 0;
+      box-shadow: 0 0 6px #ef4444; transition: all .3s;
+    }
+    .status-dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+
+    /* Sections */
+    .section { padding: 12px 14px; border-bottom: 1px solid #18181b; }
+    .label {
+      font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+      color: #52525b; font-weight: 600; margin-bottom: 5px;
+    }
+
+    /* Inputs */
+    select, input[type=text] {
+      width: 100%; background: #111118;
+      border: 1px solid #27272a; border-radius: 7px;
+      padding: 7px 10px; color: #e4e4e7;
+      font-size: 12px; outline: none; transition: border-color .2s;
+    }
+    select:focus, input:focus { border-color: #6366f1; }
+
+    /* Buttons */
+    .btn {
+      width: 100%; padding: 9px; border-radius: 8px;
+      font-size: 12px; font-weight: 700; cursor: pointer;
+      border: none; transition: all .2s;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-primary { background: #6366f1; color: #fff; margin-top: 8px; }
+    .btn-primary:hover { background: #818cf8; }
+    .btn-danger { background: #2d1515; color: #f87171; border: 1px solid #451a1a; margin-top: 6px; }
+    .btn-danger:hover { background: #3b1f1f; }
+
+    /* Watching banner */
+    #watching-banner {
+      display: none;
+      background: #052e16; border: 1px solid #14532d; border-radius: 8px;
+      padding: 8px 11px; margin-top: 8px; font-size: 11px; color: #4ade80; line-height: 1.5;
+    }
+    #watching-banner.visible { display: block; }
+
+    /* Endpoints */
+    #endpoints-log { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
+    .endpoint-card {
+      background: #111118; border: 1px solid #27272a; border-radius: 7px; padding: 7px 9px;
+      animation: slideIn .25s ease;
+    }
+    .endpoint-card.success { border-color: #14532d; }
+    @keyframes slideIn { from { opacity:0; transform: translateY(-3px); } to { opacity:1; transform: translateY(0); } }
+    .endpoint-url { font-family: monospace; font-size: 10px; color: #a3e635; word-break: break-all; margin-bottom: 3px; }
+    .endpoint-meta { font-size: 10px; color: #52525b; }
+    .endpoint-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px; font-weight: 700; margin-top: 3px; }
+    .badge-api { background: #14532d; color: #4ade80; }
+
+    /* Empty */
+    .empty { text-align: center; padding: 16px 10px; color: #3f3f46; font-size: 11px; line-height: 1.6; }
+    .empty-icon { font-size: 24px; margin-bottom: 6px; }
+
+    /* Settings row */
+    .settings-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .settings-row input { flex: 1; }
+    .btn-sm {
+      padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;
+      background: #1c1c28; border: 1px solid #27272a; color: #a1a1aa; cursor: pointer; white-space: nowrap;
+    }
+    .btn-sm:hover { background: #27272a; color: #fff; }
+
+    /* Status bar */
+    .status-bar { font-size: 10px; color: #52525b; margin-top: 5px; }
+    .status-bar span { color: #6366f1; }
+
+    /* Footer */
+    .footer { padding: 7px 14px; font-size: 10px; color: #3f3f46; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">🔭</div>
+  <div>
+    <div class="header-title">CareerOS Watcher</div>
+    <div class="header-sub">Real network intercept · job API discovery</div>
+  </div>
+  <div class="status-dot" id="status-dot"></div>
+</div>
+
+<!-- Company Selector -->
+<div class="section">
+  <div class="label">Select Company to Watch</div>
+  <select id="company-select">
+    <option value="">Loading…</option>
+  </select>
+  <div class="status-bar">Backend: <span id="status-api">connecting…</span></div>
+
+  <div id="watching-banner">
+    ✅ Interceptor active for <strong id="watching-company-name"></strong>.<br>
+    The careers page is loading — network calls will be captured automatically.
+  </div>
+
+  <button class="btn btn-primary" id="start-btn">▶ Start Watching This Company</button>
+  <button class="btn btn-danger" id="stop-btn" style="display:none">⏹ Stop Watching</button>
+</div>
+
+<!-- Live Endpoints -->
+<div class="section">
+  <div class="label">Intercepted Endpoints — Live</div>
+  <div id="endpoints-log">
+    <div class="empty">
+      <div class="empty-icon">📡</div>
+      No endpoints captured yet.<br>
+      Select a company and click <strong>Start Watching</strong>.
+    </div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div class="section">
+  <div class="label">Settings</div>
+
+  <div class="settings-row">
+    <input type="text" id="email-input" placeholder="Your CareerOS email" />
+  </div>
+  <div class="settings-row">
+    <input type="text" id="api-url-input" placeholder="http://localhost:3001" />
+    <button class="btn-sm" id="save-settings-btn">Save</button>
+  </div>
+  <div style="font-size:10px;color:#3f3f46;margin-top:4px">Email must match what you use on the CareerOS dashboard.</div>
+</div>
+
+<div class="footer">
+  <span id="capture-count">0 endpoints captured</span>
+  <span>CareerOS v1.0</span>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

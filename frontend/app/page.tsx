@@ -86,10 +86,164 @@ export default function Home() {
     { id: "step-7", name: "7. Weighted Ranking & Telegram Alerts", description: "Combines matching scores and dispatches top alerts to Telegram", status: "idle" },
   ]);
 
+  const [activeTab, setActiveTab] = useState<"search" | "watcher">("search");
+
+  // Watcher states
+  const [watchlists, setWatchlists] = useState<any[]>([]);
+  const [loadingWatchlists, setLoadingWatchlists] = useState<boolean>(false);
+  const [companyName, setCompanyName] = useState("");
+  const [companyIdentifier, setCompanyIdentifier] = useState("");
+  const [careersUrl, setCareersUrl] = useState("");
+  const [desiredRolesStr, setDesiredRolesStr] = useState("");
+  const [preferredLocationsStr, setPreferredLocationsStr] = useState("");
+  const [keywordsStr, setKeywordsStr] = useState("");
+  const [notificationFrequency, setNotificationFrequency] = useState("realtime");
+
+  // Real discovered endpoints feed
+  const [discoveredEndpoints, setDiscoveredEndpoints] = useState<{
+    requestUrl: string;
+    method: string;
+    classification?: string;
+    confidenceScore?: number;
+    companyName: string;
+    capturedAt: string;
+    saved: boolean;
+  }[]>([]);
+  const [discovering, setDiscovering] = useState<number | null>(null); // companyId being scanned
+
+  const fetchWatchlist = async (email?: string) => {
+    setLoadingWatchlists(true);
+    try {
+      const activeEmail = email || profile?.email || localStorage.getItem("user_email") || "default-watcher-user@careeratlas.com";
+      const res = await fetch(`/api/watcher/watchlist?email=${encodeURIComponent(activeEmail)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setWatchlists(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Error loading watchlist: ${e.message}`);
+    } finally {
+      setLoadingWatchlists(false);
+    }
+  };
+
+  const handleAddWatchlist = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!companyName || !companyIdentifier || !careersUrl) {
+      alert("Please fill in all company registry fields.");
+      return;
+    }
+
+    const email = profile?.email || localStorage.getItem("user_email") || "default-watcher-user@careeratlas.com";
+
+    try {
+      const res = await fetch("/api/watcher/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userEmail: email,
+          companyIdentifier: companyIdentifier.toLowerCase().trim(),
+          companyName,
+          careersUrl,
+          desiredRoles: desiredRolesStr.split(",").map(s => s.trim()).filter(Boolean),
+          preferredLocations: preferredLocationsStr.split(",").map(s => s.trim()).filter(Boolean),
+          keywords: keywordsStr.split(",").map(s => s.trim()).filter(Boolean),
+          notificationFrequency
+        })
+      });
+
+      if (res.ok) {
+        addLog(`Successfully added ${companyName} to your watchlist!`);
+        setCompanyName("");
+        setCompanyIdentifier("");
+        setCareersUrl("");
+        setDesiredRolesStr("");
+        setPreferredLocationsStr("");
+        setKeywordsStr("");
+        fetchWatchlist(email);
+      } else {
+        throw new Error(await res.text());
+      }
+    } catch (e: any) {
+      addLog(`Error adding watchlist: ${e.message}`);
+    }
+  };
+
+  const handleDeleteWatchlist = async (companyId: number) => {
+    const email = profile?.email || localStorage.getItem("user_email") || "default-watcher-user@careeratlas.com";
+    try {
+      const res = await fetch(`/api/watcher/watchlist/${companyId}?email=${encodeURIComponent(email)}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        addLog("Company removed from watchlist.");
+        fetchWatchlist(email);
+      } else {
+        throw new Error(await res.text());
+      }
+    } catch (e: any) {
+      addLog(`Error deleting watchlist: ${e.message}`);
+    }
+  };
+
+  const handleTriggerWatcherCheck = async () => {
+    addLog("Triggering global watcher check cycle...");
+    try {
+      const res = await fetch("/api/watcher/check-now", {
+        method: "POST"
+      });
+      if (res.ok) {
+        addLog("Watcher scan initiated successfully in background.");
+        setTimeout(() => {
+          fetchWatchlist();
+        }, 1500);
+      } else {
+        throw new Error(await res.text());
+      }
+    } catch (e: any) {
+      addLog(`Error running watcher: ${e.message}`);
+    }
+  };
+
+  // Fetch captured endpoints from backend discovery_metadata table
+  const fetchDiscoveredEndpoints = async (companyIdentifier?: string) => {
+    try {
+      const url = companyIdentifier
+        ? `/api/watcher/discovered?companyIdentifier=${encodeURIComponent(companyIdentifier)}`
+        : `/api/watcher/discovered`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveredEndpoints(data.map((d: any) => ({
+          requestUrl: d.request_url,
+          method: d.method,
+          classification: d.classification,
+          confidenceScore: d.confidence_score,
+          companyName: d.company_identifier,
+          capturedAt: d.created_at,
+          saved: d.is_monitored_server_side
+        })));
+      }
+    } catch {}
+  };
+
+  // When user installs extension and visits a page, the extension POSTs to /api/watcher/discover.
+  // The frontend polls /api/watcher/discovered to show those real captures live.
+  useEffect(() => {
+    if (activeTab === "watcher") {
+      fetchDiscoveredEndpoints();
+      const interval = setInterval(fetchDiscoveredEndpoints, 5000); // poll every 5s
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
+
+
+
   // Load existing profile on mount if available
   useEffect(() => {
     fetchProfile().then(() => {
       fetchResults();
+      fetchWatchlist();
     });
   }, []);
 
@@ -385,9 +539,34 @@ export default function Home() {
           <div className="flex items-center gap-3">
           </div>
         </header>
+        {/* Tab Switcher */}
+        <div className="flex border-b border-zinc-800 mb-10 gap-2">
+          <button
+            onClick={() => setActiveTab("search")}
+            className={`py-3 px-6 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "search"
+                ? "border-emerald-500 text-emerald-400"
+                : "border-transparent text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            🔍 Autonomous Search Pipeline
+          </button>
+          <button
+            onClick={() => setActiveTab("watcher")}
+            className={`py-3 px-6 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "watcher"
+                ? "border-emerald-500 text-emerald-400"
+                : "border-transparent text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            🏢 Dream Company Watcher
+          </button>
+        </div>
 
-        {/* Dashboard Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {activeTab === "search" ? (
+          <>
+            {/* Dashboard Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* Left Column - Steps & Config */}
           <div className="lg:col-span-7 flex flex-col gap-8">
             
@@ -920,6 +1099,280 @@ export default function Home() {
             </div>
           )}
         </section>
+      </>
+    ) : (
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Left Column - Config */}
+        <div className="lg:col-span-5 flex flex-col gap-8">
+          {/* Watchlist Setup */}
+          <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/50 group-hover:bg-emerald-400 transition-colors" />
+            <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+              🏢 Watchlist Preferences
+            </h2>
+            <p className="text-xs text-zinc-400 mb-6">
+              Track openings from specific companies and configure filtering options.
+            </p>
+            <form onSubmit={handleAddWatchlist} className="flex flex-col gap-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Company Name</label>
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => {
+                    setCompanyName(e.target.value);
+                    if (!companyIdentifier) {
+                      setCompanyIdentifier(e.target.value.toLowerCase().replace(/\s+/g, '-'));
+                    }
+                  }}
+                  placeholder="e.g. Stripe"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Company Identifier (Slug)</label>
+                <input
+                  type="text"
+                  value={companyIdentifier}
+                  onChange={(e) => setCompanyIdentifier(e.target.value.toLowerCase())}
+                  placeholder="e.g. stripe"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Careers URL</label>
+                <input
+                  type="url"
+                  value={careersUrl}
+                  onChange={(e) => setCareersUrl(e.target.value)}
+                  placeholder="e.g. https://stripe.com/jobs"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Desired Roles (comma separated)</label>
+                <input
+                  type="text"
+                  value={desiredRolesStr}
+                  onChange={(e) => setDesiredRolesStr(e.target.value)}
+                  placeholder="e.g. Frontend, Fullstack, Engineer"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Preferred Locations (comma separated)</label>
+                <input
+                  type="text"
+                  value={preferredLocationsStr}
+                  onChange={(e) => setPreferredLocationsStr(e.target.value)}
+                  placeholder="e.g. Remote, Ahmedabad, Bangalore"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Keywords / Skills (comma separated)</label>
+                <input
+                  type="text"
+                  value={keywordsStr}
+                  onChange={(e) => setKeywordsStr(e.target.value)}
+                  placeholder="e.g. React, TypeScript, Node"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Notification Frequency</label>
+                <select
+                  value={notificationFrequency}
+                  onChange={(e) => setNotificationFrequency(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                >
+                  <option value="realtime">Near Real-time</option>
+                  <option value="daily">Daily digest</option>
+                  <option value="weekly">Weekly digest</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                className="mt-2 bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-sm py-4 rounded-xl transition-all shadow-lg shadow-emerald-500/10 active:scale-[0.98] flex items-center justify-center gap-2"
+              >
+                Add to Watchlist
+              </button>
+            </form>
+          </section>
+
+        </div>
+
+        {/* Right Column - Status list */}
+        <div className="lg:col-span-7 flex flex-col gap-8">
+          {/* Global trigger */}
+          <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-white">Monitoring Service Status</h3>
+              <p className="text-xs text-zinc-450 mt-1 font-medium">
+                Autonomous workers run periodic cron tasks to compare job feeds against active preferences.
+              </p>
+            </div>
+            <button
+              onClick={handleTriggerWatcherCheck}
+              className="bg-teal-500 hover:bg-teal-400 text-black px-5 py-3 rounded-xl text-xs font-bold transition-all shadow-lg shadow-teal-500/10 active:scale-95 flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Scan Watchlist Now
+            </button>
+          </section>
+
+          {/* Watchlist list */}
+          <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl flex-1 flex flex-col">
+            <h3 className="text-base font-bold text-white mb-6">Your Company Watchlist</h3>
+
+            {loadingWatchlists ? (
+              <div className="flex-1 flex justify-center items-center py-12">
+                <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : watchlists.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center py-12 border border-dashed border-zinc-800 rounded-xl bg-zinc-950/10 text-center">
+                <svg className="w-10 h-10 text-zinc-700 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                <span className="text-sm text-zinc-500 font-medium">No companies on your watchlist yet.</span>
+                <span className="text-xs text-zinc-650 mt-1 max-w-sm">Configure and add a company on the left panel to start tracking.</span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {watchlists.map((item) => {
+                  let statusBadge = "bg-zinc-900 border-zinc-800 text-zinc-500";
+                  let statusText = item.monitoring_status || 'Pending Discovery';
+
+                  if (['Public API', 'GraphQL Endpoint', 'Static HTML Page'].includes(item.monitoring_status)) {
+                    statusBadge = "bg-emerald-950/40 border-emerald-800/30 text-emerald-400";
+                  } else if (item.monitoring_status === 'Unsupported' || item.monitoring_status === 'Advanced Scraping Required') {
+                    statusBadge = "bg-red-950/40 border-red-900/30 text-red-400";
+                  } else if (item.monitoring_status === 'Pending Discovery') {
+                    statusBadge = "bg-amber-950/40 border-amber-950/30 text-amber-400";
+                  } else if (item.monitoring_status) {
+                    statusBadge = "bg-blue-950/40 border-blue-900/30 text-blue-400";
+                  }
+
+                  return (
+                    <div key={item.id} className="bg-zinc-950/40 border border-zinc-850 p-5 rounded-xl flex flex-col md:flex-row justify-between gap-4 group hover:border-zinc-850 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 mb-2 flex-wrap">
+                          <h4 className="text-sm font-bold text-white">{item.company_name}</h4>
+                          <span className={`text-[9px] px-2 py-0.5 rounded border font-mono font-medium ${statusBadge}`}>
+                            {statusText}
+                          </span>
+                        </div>
+                        <div className="text-xs text-zinc-555 leading-normal flex flex-col gap-1 mb-3 font-medium">
+                          <span className="truncate">🔗 <a href={item.careers_url} target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline">{item.careers_url}</a></span>
+                          {item.endpoint_url && (
+                            <span className="truncate font-mono text-[9px] text-zinc-600 font-semibold mt-1">Endpoint: {item.endpoint_url}</span>
+                          )}
+                          {statusText === 'Pending Discovery' && (
+                            <span className="text-[10px] text-amber-400/90 leading-relaxed font-semibold mt-2 block bg-amber-950/10 border border-amber-900/20 rounded-xl p-3">
+                              ⏳ Automatic discovery pending. Please visit the company's careers site in your browser with the extension active to intercept network requests, or click "🔌 Sim Discovery" to the right to simulate traffic.
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Preferences */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-zinc-900/60 pt-3">
+                          <div>
+                            <span className="text-[9px] text-zinc-500 uppercase tracking-wider block">Roles</span>
+                            <span className="text-xs text-zinc-300 font-medium truncate block">{item.desired_roles?.join(', ') || 'Any'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-zinc-500 uppercase tracking-wider block">Locations</span>
+                            <span className="text-xs text-zinc-300 font-medium truncate block">{item.preferred_locations?.join(', ') || 'Any'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-zinc-500 uppercase tracking-wider block">Keywords</span>
+                            <span className="text-xs text-zinc-300 font-medium truncate block">{item.keywords?.join(', ') || 'None'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-zinc-500 uppercase tracking-wider block">Frequency</span>
+                            <span className="text-xs text-zinc-300 font-medium capitalize block">{item.notification_frequency}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-row md:flex-col justify-end gap-2 shrink-0 md:self-center">
+                        <button
+                          onClick={() => handleDeleteWatchlist(item.company_id)}
+                          className="bg-red-950/20 hover:bg-red-900/30 text-red-400 border border-red-900/50 hover:border-red-800 px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Live Captured Endpoints from Chrome Extension */}
+          <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl flex flex-col">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">📡 Live Captured Network Endpoints</h3>
+                <p className="text-xs text-zinc-500 mt-1">Real API calls intercepted by the Chrome Extension when you visit a careers page.</p>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400">
+                Auto-refreshing every 5s
+              </span>
+            </div>
+
+            {discoveredEndpoints.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center py-10 border border-dashed border-zinc-800 rounded-xl bg-zinc-950/10 text-center">
+                <div className="text-3xl mb-3">🔌</div>
+                <p className="text-sm text-zinc-500 font-medium">No endpoints captured yet</p>
+                <p className="text-xs text-zinc-600 mt-2 max-w-xs leading-relaxed">
+                  Install the Chrome Extension → Select a company → Visit their careers page. The extension will automatically intercept and report real job API calls here.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3 max-h-96 overflow-y-auto">
+                {discoveredEndpoints.map((ep, idx) => (
+                  <div key={idx} className={`rounded-xl border p-4 ${
+                    ep.saved
+                      ? 'bg-emerald-950/20 border-emerald-900/30'
+                      : 'bg-zinc-950/40 border-zinc-800'
+                  }`}>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <code className="text-xs text-emerald-400 break-all font-mono leading-relaxed flex-1">
+                        {ep.requestUrl}
+                      </code>
+                      <span className="shrink-0 text-[9px] font-bold px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono">
+                        {ep.method}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[9px] text-zinc-500">{ep.companyName}</span>
+                      <span className="text-[9px] text-zinc-600">·</span>
+                      <span className="text-[9px] text-zinc-500">{new Date(ep.capturedAt).toLocaleTimeString()}</span>
+                      {ep.classification && (
+                        <span className="text-[9px] px-2 py-0.5 rounded border font-mono font-semibold bg-emerald-950/40 border-emerald-800/30 text-emerald-400">
+                          ✓ {ep.classification}
+                        </span>
+                      )}
+                      {ep.confidenceScore && (
+                        <span className="text-[9px] text-zinc-500">Confidence: {ep.confidenceScore}%</span>
+                      )}
+                      {ep.saved && (
+                        <span className="text-[9px] px-2 py-0.5 rounded border font-semibold bg-teal-950/40 border-teal-800/30 text-teal-400">
+                          🚀 Monitoring Active
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    )}
       </div>
     </div>
   );
