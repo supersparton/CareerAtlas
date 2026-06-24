@@ -135,7 +135,7 @@ export class MatchingWorker extends WorkerHost {
         if (profileObj) {
           try {
             const reasoningPrompt = `
-              You are an expert career agent. Write a concise, 2-sentence explanation of why the following job is a great match for the candidate.
+              You are an expert career agent. Write a concise, 2-sentence explanation of why the following job matches (or why the matching score is slightly lower/higher) for the candidate.
               
               Job Details:
               - Title: ${job.title}
@@ -147,8 +147,22 @@ export class MatchingWorker extends WorkerHost {
               - Skills: ${profileObj.skills.join(', ')}
               - Experience: ${profileObj.experienceYears} years
               
-              Explain the match clearly and professionally, highlighting the candidate's skills and projects that align.
-              Do not include any greeting or conversational fluff. Write exactly 2 sentences.
+              Match Analysis:
+              - Eligibility: ${match.eligibility}
+              - Match Score: ${finalScore}%
+              - Core Domain Match: Family (${match.familyScore}%), Subfamily (${match.subFamilyScore}%)
+              - Required Skills Match: ${match.requiredSkillScore}%
+              - Preferred Skills Match: ${match.preferredSkillScore}%
+              - Experience Score: ${experienceScore}%
+              - Location Score: ${match.locationScore}%
+              - Structured Match Details: ${reasoning}
+              
+              Guidelines:
+              1. If the candidate is a perfect match (all required skills matched, high score), write a highly positive response mentioning they are a perfect match.
+              2. If the candidate is missing any preferred skills, explain that the ranking is slightly lower because they miss specific preferred skills (mention those missing preferred skills).
+              3. If they failed eligibility or have low scores, be honest but professional about the mismatch in critical skills.
+              4. Explain the match clearly and professionally, highlighting the candidate's skills and projects that align.
+              5. Do not include any greeting or conversational fluff. Write exactly 2 sentences.
             `;
             const startTime = Date.now();
             const response = await this.profileService.invokeModel(reasoningPrompt);

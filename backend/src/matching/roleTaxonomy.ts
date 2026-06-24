@@ -1,63 +1,226 @@
-export const ROLE_TAXONOMY: { [key: string]: string[] } = {
-  // Specialized families first
-  mobile: ["mobile", "android", "ios", "flutter", "react native", "xamarin", "swift", "kotlin"],
-  backend: ["backend", "java", "spring", "node", "golang", "dotnet", "django", "flask", "python developer", "ruby on rails", "ror", "expressjs", "c++", "c#"],
-  frontend: ["frontend", "react", "angular", "vue", "nextjs", "nuxt", "svelte", "javascript", "typescript", "html", "css", "web developer", "ui engineer"],
-  fullstack: ["fullstack", "full stack", "mern", "mean", "jamstack"],
-  devops: ["devops", "sre", "kubernetes", "docker", "platform", "cloud", "aws", "gcp", "azure", "terraform", "ci/cd", "jenkins"],
-  data: ["data engineer", "machine learning", "ml", "ai", "nlp", "computer vision", "deep learning", "data scientist", "data analyst", "analytics engineer", "spark", "hadoop", "tensorflow", "pytorch"],
-  security: ["security", "soc", "cybersecurity", "pentest", "penetration", "appsec", "infosec", "cryptography"],
-  qa: ["qa", "quality assurance", "testing", "selenium", "cypress", "automation engineer", "sdet"],
-  product: ["product manager", "pm", "apm", "tpm", "product owner"],
-  design: ["product designer", "ui/ux", "ux designer", "ui designer", "graphic designer", "figma"],
-  
-  // General/Fallback software family last
-  software: ["software engineer", "software developer", "sde", "application engineer", "member of technical staff", "mts"]
-};
+// roleTaxonomy.ts
 
-export const FAMILY_HIERARCHY: { [key: string]: string[] } = {
-  software: [
-    "mobile",
-    "backend",
-    "frontend",
-    "fullstack",
-    "devops",
-    "data",
-    "security",
-    "qa"
-  ]
-};
+export interface SkillOntology {
+  family: string;
+  subfamily: string;
+  skills: string[];
+}
 
-function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const ROLE_ONTOLOGY = {
+  mobile: {
+    android: [
+      "android",
+      "kotlin",
+      "java",
+      "jetpack compose",
+      "android sdk",
+      "room",
+      "dagger",
+      "hilt"
+    ],
+
+    ios: [
+      "ios",
+      "swift",
+      "swiftui",
+      "objective-c",
+      "xcode"
+    ],
+
+    cross_platform: [
+      "flutter",
+      "dart",
+      "react native",
+      "expo",
+      "ionic",
+      "xamarin"
+    ]
+  },
+
+  frontend: {
+    react: [
+      "react",
+      "redux",
+      "nextjs",
+      "javascript",
+      "typescript"
+    ],
+
+    angular: [
+      "angular",
+      "rxjs",
+      "ngrx"
+    ],
+
+    vue: [
+      "vue",
+      "nuxt",
+      "pinia"
+    ]
+  },
+
+  backend: {
+    java: [
+      "java",
+      "spring",
+      "spring boot",
+      "hibernate"
+    ],
+
+    node: [
+      "node",
+      "nodejs",
+      "express",
+      "nestjs"
+    ],
+
+    python: [
+      "python",
+      "django",
+      "flask",
+      "fastapi"
+    ],
+
+    golang: [
+      "go",
+      "golang"
+    ],
+
+    dotnet: [
+      ".net",
+      "dotnet",
+      "c#",
+      "asp.net"
+    ]
+  },
+
+  data: {
+    machine_learning: [
+      "machine learning",
+      "deep learning",
+      "tensorflow",
+      "pytorch",
+      "computer vision",
+      "nlp"
+    ],
+
+    data_science: [
+      "data scientist",
+      "statistics",
+      "pandas",
+      "numpy",
+      "scikit-learn"
+    ],
+
+    data_engineering: [
+      "data engineer",
+      "spark",
+      "hadoop",
+      "airflow",
+      "kafka"
+    ]
+  },
+
+  devops: {
+    cloud: [
+      "aws",
+      "azure",
+      "gcp"
+    ],
+
+    infrastructure: [
+      "docker",
+      "kubernetes",
+      "terraform",
+      "jenkins",
+      "ansible",
+      "ci/cd"
+    ]
+  },
+
+  security: {
+    cybersecurity: [
+      "cybersecurity",
+      "soc",
+      "siem",
+      "infosec"
+    ],
+
+    offensive: [
+      "penetration testing",
+      "pentest",
+      "red team",
+      "ethical hacking"
+    ]
+  },
+
+  qa: {
+    automation: [
+      "selenium",
+      "cypress",
+      "playwright",
+      "sdet"
+    ],
+
+    manual: [
+      "manual testing",
+      "qa",
+      "quality assurance"
+    ]
+  }
+} as const;
+
+export const GENERIC_SOFTWARE_TITLES = [
+  "software engineer",
+  "software developer",
+  "sde",
+  "member of technical staff",
+  "mts",
+  "application engineer",
+  "product engineer"
+];
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function cleanTitleForTaxonomy(title: string): string {
   if (!title) return "";
-  // Remove " @ Company" or " at Company"
-  let cleaned = title.replace(/\s+@\s+.+$/i, "");
+
+  let cleaned = title;
+
+  cleaned = cleaned.replace(/\s+@\s+.+$/i, "");
   cleaned = cleaned.replace(/\s+\bat\b\s+.+$/i, "");
   cleaned = cleaned.replace(/\(YC\s+\w+\)/i, "");
+
   return cleaned.trim();
 }
 
-export function detectFamily(title: string): string | null {
-  if (!title) return null;
-  const cleanedTitle = cleanTitleForTaxonomy(title);
-  const titleLower = cleanedTitle.toLowerCase().trim();
+export function detectRole(
+  text: string
+): SkillOntology | null {
 
-  for (const [family, keywords] of Object.entries(ROLE_TAXONOMY)) {
-    for (const kw of keywords) {
-      const kwLower = kw.toLowerCase();
-      // For short acronyms/terms like ml, ai, pm, qa, soc, use word boundary checks
-      if (kwLower.length <= 3) {
-        const regex = new RegExp(`\\b${escapeRegExp(kwLower)}\\b`, "i");
-        if (regex.test(titleLower)) {
-          return family;
-        }
-      } else {
-        if (titleLower.includes(kwLower)) {
-          return family;
+  if (!text) return null;
+
+  const normalized = text.toLowerCase();
+
+  for (const [family, subfamilies] of Object.entries(ROLE_ONTOLOGY)) {
+
+    for (const [subfamily, skills] of Object.entries(subfamilies)) {
+
+      for (const skill of skills) {
+
+        const regex = new RegExp(
+          `\\b${escapeRegExp(skill.toLowerCase())}\\b`,
+          "i"
+        );
+
+        if (regex.test(normalized)) {
+          return {
+            family,
+            subfamily,
+            skills
+          };
         }
       }
     }
@@ -66,24 +229,103 @@ export function detectFamily(title: string): string | null {
   return null;
 }
 
-export function isAncestor(parent: string, child: string): boolean {
-  if (!parent || !child) return false;
-  
-  const p = parent.toLowerCase();
-  const c = child.toLowerCase();
+export function detectFamily(text: string): string | null {
 
-  // Allow bidirectional matching for core web roles: backend, frontend, fullstack <-> software
-  const coreRoles = ["backend", "frontend", "fullstack"];
-  if (p === "software" && coreRoles.includes(c)) {
-    return true;
-  }
-  if (c === "software" && coreRoles.includes(p)) {
-    return true;
+  const role = detectRole(text);
+
+  if (role) {
+    return role.family;
   }
 
-  const children = FAMILY_HIERARCHY[p];
-  if (children && children.includes(c)) {
-    return true;
+  const title = cleanTitleForTaxonomy(text).toLowerCase();
+
+  for (const generic of GENERIC_SOFTWARE_TITLES) {
+
+    if (title.includes(generic.toLowerCase())) {
+      return "software";
+    }
   }
-  return false;
+
+  return null;
+}
+
+export function detectSubfamily(
+  text: string
+): string | null {
+
+  const role = detectRole(text);
+
+  return role?.subfamily ?? null;
+}
+
+export function getMatchedSkills(
+  text: string
+): string[] {
+
+  const normalized = text.toLowerCase();
+
+  const matched = new Set<string>();
+
+  for (const subfamilies of Object.values(ROLE_ONTOLOGY)) {
+
+    for (const skills of Object.values(subfamilies)) {
+
+      for (const skill of skills) {
+
+        const regex = new RegExp(
+          `\\b${escapeRegExp(skill.toLowerCase())}\\b`,
+          "i"
+        );
+
+        if (regex.test(normalized)) {
+          matched.add(skill);
+        }
+      }
+    }
+  }
+
+  return [...matched];
+}
+
+export function calculateFamilySimilarity(
+  familyA: string | null,
+  familyB: string | null
+): number {
+
+  if (!familyA || !familyB) return 0;
+
+  if (familyA === familyB) {
+    return 1;
+  }
+
+  if (
+    familyA === "software" ||
+    familyB === "software"
+  ) {
+    return 0.5;
+  }
+
+  return 0;
+}
+
+export function calculateSubfamilySimilarity(
+  familyA: string | null,
+  subA: string | null,
+  familyB: string | null,
+  subB: string | null
+): number {
+
+  if (!familyA || !familyB) {
+    return 0;
+  }
+
+  if (familyA !== familyB) {
+    return 0;
+  }
+
+  if (subA === subB) {
+    return 1;
+  }
+
+  return 0.3;
 }

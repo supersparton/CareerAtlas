@@ -8,6 +8,7 @@ import { PromptTemplate } from '@langchain/core/prompts';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 
 export interface JobRequirements {
+  criticalSkills?: string[];
   requiredSkills: string[];
   preferredSkills: string[];
   experienceRequired: number;

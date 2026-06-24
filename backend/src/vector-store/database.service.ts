@@ -93,6 +93,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       // Ensure new columns and types exist for existing tables
       await client.query(`
         ALTER TABLE user_preferences ALTER COLUMN experience_years TYPE NUMERIC(3,1);
+        ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS salary_expectation INTEGER;
         ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS education TEXT[] DEFAULT '{}';
         ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS projects TEXT[] DEFAULT '{}';
         ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS achievements TEXT[] DEFAULT '{}';

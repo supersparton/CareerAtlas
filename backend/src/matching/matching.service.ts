@@ -6,7 +6,13 @@ import { UserProfile } from '../profile/profile.service';
 import { JobRequirements } from '../intelligence/job-intelligence.service';
 import { Job } from '../discovery/discovery.service';
 import { QdrantService } from '../vector-store/qdrant.service';
-import { detectFamily, isAncestor } from './roleTaxonomy';
+import {
+  ROLE_ONTOLOGY,
+  detectFamily,
+  detectSubfamily,
+  calculateFamilySimilarity,
+  calculateSubfamilySimilarity,
+} from './roleTaxonomy';
 
 export interface SkillScore {
   overlapSkills: string[];
@@ -36,6 +42,22 @@ export interface RankedJob {
   experienceScore: number;
   educationScore: number;
   reasoning: string;
+
+  // Explainability outputs
+  overallScore: number;
+  requiredSkillScore: number;
+  preferredSkillScore: number;
+  domainScore: number;
+  locationScore: number;
+  matchedSkills: string[];
+  missingSkills: string[];
+  explanation: string;
+  eligible: boolean;
+
+  // Compatibility fields
+  eligibility: string;
+  familyScore: number;
+  subFamilyScore: number;
 }
 
 @Injectable()
@@ -72,6 +94,20 @@ export class MatchingService {
     'k8s': 'devops',
   };
 
+  // Pre-compiled skill index for O(1) ontology lookups
+  private static readonly SKILL_INDEX: Record<string, { family: string; subfamily: string }> = (() => {
+    const index: Record<string, { family: string; subfamily: string }> = {};
+    for (const [family, subfamilies] of Object.entries(ROLE_ONTOLOGY)) {
+      for (const [subfamily, skills] of Object.entries(subfamilies)) {
+        for (const skill of skills) {
+          const cleanSkill = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
+          index[cleanSkill] = { family, subfamily };
+        }
+      }
+    }
+    return index;
+  })();
+
   private stats = {
     titleReject: 0,
     locationReject: 0,
@@ -79,6 +115,22 @@ export class MatchingService {
     employmentReject: 0,
     remoteReject: 0,
     solelyExperienceReject: 0,
+  };
+
+  private readonly locationSynonyms: { [key: string]: string } = {
+    'bangalore': 'bengaluru',
+    'banglore': 'bengaluru',
+    'bangalore urban': 'bengaluru',
+    'bengaluru': 'bengaluru',
+    'mumbai': 'mumbai',
+    'bombay': 'mumbai',
+    'new york': 'new york',
+    'new york city': 'new york',
+    'nyc': 'new york',
+    'ny': 'new york',
+    'san francisco': 'san francisco',
+    'sf': 'san francisco',
+    'bay area': 'san francisco'
   };
 
   constructor(
@@ -89,7 +141,7 @@ export class MatchingService {
   /**
    * Main Orchestrator for Job Recommendation matching pipeline.
    */
-  async matchAndRankJobs(userId: number, limit = 10): Promise<RankedJob[]> {
+  async matchAndRankJobs(userId: number, limit = 20): Promise<RankedJob[]> {
     this.logger.log(`[MATCHING] Running semantic recommendation matching for user ID: ${userId}...`);
     
     // 1. Fetch User Profile from database
@@ -99,10 +151,7 @@ export class MatchingService {
       return [];
     }
 
-    console.log(`
-[TRACE] before_matching:
-canonical_role: ${JSON.stringify(profile.preferredRoles)}
-`);
+    console.log(`\n[TRACE] before_matching:\ncanonical_role: ${JSON.stringify(profile.preferredRoles)}\n`);
 
     // 2. Retrieve user vector from Qdrant
     let userVector: number[] | null = null;
@@ -150,6 +199,7 @@ canonical_role: ${JSON.stringify(profile.preferredRoles)}
             applyUrl: payload.url,
           },
           reqs: {
+            criticalSkills: payload.criticalSkills || [],
             requiredSkills: payload.requiredSkills || [],
             preferredSkills: payload.preferredSkills || [],
             experienceRequired: payload.experienceRequired || 0,
@@ -212,28 +262,125 @@ ${this.stats.solelyExperienceReject}
     
     if (filteredJobs.length === 0) return [];
 
-    // 5. Pack results (using similarity score as the rank indicator)
+    // 5. Compute scores and perform Hard Rejection & Priority-Weighted Ranking
     const rankedJobs: RankedJob[] = [];
     for (const { job, reqs, similarity } of filteredJobs) {
       try {
-        const finalScore = Math.round(Math.max(0, Math.min(100, similarity * 100)));
+        const userFamilySub = this.determineFamilyAndSubfamily(profile.preferredRoles[0] || '', profile.skills);
+        const jobFamilySub = this.determineFamilyAndSubfamily(job.title, reqs.requiredSkills);
+
+        // A. Domain Fit Score
+        const domainScore = this.calculateDomainScore(
+          userFamilySub.family,
+          userFamilySub.subfamily,
+          jobFamilySub.family,
+          jobFamilySub.subfamily
+        );
+
+        // B. Skill Scores
+        const criticalSkillResult = this.calculateSkillScore(profile.skills, reqs.criticalSkills || []);
+        const requiredSkillResult = this.calculateSkillScore(profile.skills, reqs.requiredSkills);
+        const preferredSkillResult = this.calculateSkillScore(profile.skills, reqs.preferredSkills);
+
+        // --- STAGE 1: HARD REJECTION ---
+        if (reqs.criticalSkills && reqs.criticalSkills.length > 0 && criticalSkillResult.score === 0) {
+          this.logger.log(`[MATCHING] Candidate ${userId} rejected for job ${job.jobId} due to missing critical skills: ${criticalSkillResult.missing.join(', ')}`);
+          continue;
+        }
+
+        if (reqs.requiredSkills.length > 0 && requiredSkillResult.score < 20) {
+          this.logger.log(`[MATCHING] Candidate ${userId} rejected for job ${job.jobId} due to low required skills match: ${requiredSkillResult.score}%`);
+          continue;
+        }
+
+        // C. Experience Match Score
+        const experienceResult = this.computeExperienceScore(profile.experienceYears, reqs.experienceRequired);
+
+        // D. Location Match Score
+        const locationScore = this.calculateLocationScore(profile, reqs);
+
+        // E. Semantic Match (using the initial Qdrant cosine similarity score directly)
+        const semanticScore = Math.round(Math.max(0, Math.min(100, similarity * 100)));
+
+        // F. Education Match
+        const educationResult = this.computeEducationScore(profile.education, reqs.educationRequirements);
+
+        // --- STAGE 2: PRIORITY-WEIGHTED RANKING ---
+        // Weights:
+        // - Required Skill Match: 45%
+        // - Domain Score (combines family/subfamily matches): 35%
+        // - Experience Match: 10%
+        // - Location Match: 5%
+        // - Preferred Skill Match: 5%
+        const overallScore = Math.round(
+          requiredSkillResult.score * 0.45 +
+          domainScore * 0.35 +
+          experienceResult.score * 0.10 +
+          locationScore * 0.05 +
+          preferredSkillResult.score * 0.05
+        );
+
+        // Generate explainability text reason
+        let explanation = '';
+        const missingRequired = requiredSkillResult.missing;
+        const missingPreferred = preferredSkillResult.missing;
+        const userDomainText = userFamilySub.subfamily || userFamilySub.family || 'software';
+
+        if (missingRequired.length === 0 && missingPreferred.length === 0) {
+          explanation = `Candidate has a strong background in ${userDomainText} with a perfect skill match.`;
+        } else if (missingPreferred.length > 0) {
+          explanation = `Candidate has ${userDomainText} experience, but lacks preferred skills like: ${missingPreferred.join(', ')}.`;
+        } else {
+          explanation = `Candidate has ${userDomainText} experience with good matching skills, but lacks required: ${missingRequired.join(', ')}.`;
+        }
+
+        const familySim = calculateFamilySimilarity(userFamilySub.family, jobFamilySub.family);
+        const familyScore = familySim * 100;
+
+        const subFamilySim = calculateSubfamilySimilarity(
+          userFamilySub.family,
+          userFamilySub.subfamily,
+          jobFamilySub.family,
+          jobFamilySub.subfamily
+        );
+        const subFamilyScore = subFamilySim * 100;
 
         rankedJobs.push({
           job,
-          finalScore,
-          skillScore: 100,
-          semanticScore: finalScore,
-          experienceScore: 100,
-          educationScore: 100,
-          reasoning: `Matched role "${job.title}" at ${job.company} with ${finalScore}% semantic similarity.`,
+          finalScore: overallScore,
+          skillScore: Math.round((requiredSkillResult.score + preferredSkillResult.score) / 2),
+          semanticScore,
+          experienceScore: experienceResult.score,
+          educationScore: educationResult.score,
+          reasoning: explanation,
+          overallScore,
+          requiredSkillScore: requiredSkillResult.score,
+          preferredSkillScore: preferredSkillResult.score,
+          domainScore,
+          locationScore,
+          matchedSkills: [
+            ...criticalSkillResult.matched,
+            ...requiredSkillResult.matched,
+            ...preferredSkillResult.matched
+          ],
+          missingSkills: [
+            ...criticalSkillResult.missing,
+            ...requiredSkillResult.missing,
+            ...preferredSkillResult.missing
+          ],
+          explanation,
+          eligible: true,
+          eligibility: 'PASS',
+          familyScore,
+          subFamilyScore,
         });
       } catch (err) {
-        this.logger.error(`[MATCHING] Error packing job ${job.jobId}: ${err.message}`);
+        this.logger.error(`[MATCHING] Error scoring job ${job.jobId}: ${err.message}`);
       }
     }
 
-    // Sort descending
-    const sorted = rankedJobs.sort((a, b) => b.finalScore - a.finalScore);
+    // Sort descending by overallScore
+    const sorted = rankedJobs.sort((a, b) => b.overallScore - a.overallScore);
     return sorted.slice(0, limit);
   }
 
@@ -260,158 +407,137 @@ ${this.stats.solelyExperienceReject}
     }
   }
 
-  private readonly roleAliases: { [key: string]: string[] } = {
-    'software engineer': [
-      'software engineer',
-      'software developer',
-      'sde',
-      'sde i',
-      'sde-ii',
-      'sde-2',
-      'sde-1',
-      'sde-3',
-      'sde iii',
-      'senior software engineer',
-      'junior software engineer',
-      'application engineer',
-      'member of technical staff',
-      'mts',
-      'technical staff member',
-      'software development engineer'
-    ],
-    'backend engineer': [
-      'backend engineer',
-      'backend developer',
-      'node.js developer',
-      'node developer',
-      'python backend developer',
-      'python developer',
-      'java developer',
-      'java backend developer',
-      'golang developer',
-      'golang backend developer',
-      'go developer',
-      'c# developer',
-      'dot net developer',
-      '.net developer',
-      'backend software engineer'
-    ],
-    'frontend engineer': [
-      'frontend engineer',
-      'frontend developer',
-      'front-end developer',
-      'front end developer',
-      'react developer',
-      'react.js developer',
-      'vue developer',
-      'angular developer',
-      'ui engineer',
-      'ui developer',
-      'frontend software engineer'
-    ],
-    'fullstack engineer': [
-      'fullstack engineer',
-      'full stack developer',
-      'full-stack developer',
-      'full stack engineer',
-      'fullstack developer'
-    ],
-    'data analyst': [
-      'data analyst',
-      'business analyst',
-      'analytics engineer',
-      'product analyst',
-      'data analytics'
-    ],
-    'data engineer': [
-      'data engineer',
-      'data platform engineer',
-      'big data engineer',
-      'analytics engineer'
-    ],
-    'data scientist': [
-      'data scientist',
-      'machine learning engineer',
-      'ml engineer',
-      'ai engineer',
-      'applied scientist'
-    ],
-    'devops engineer': [
-      'devops engineer',
-      'site reliability engineer',
-      'sre',
-      'platform engineer',
-      'cloud engineer',
-      'systems engineer'
-    ],
-    'product manager': [
-      'product manager',
-      'pm',
-      'associate product manager',
-      'technical product manager'
-    ]
-  };
+  private normalizeSkillName(skill: string): string {
+    if (!skill) return '';
+    const clean = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
+    return this.SKILL_MAP[clean] || clean;
+  }
 
-  private readonly locationSynonyms: { [key: string]: string } = {
-    'bangalore': 'bengaluru',
-    'banglore': 'bengaluru',
-    'bangalore urban': 'bengaluru',
-    'bengaluru': 'bengaluru',
-    'mumbai': 'mumbai',
-    'bombay': 'mumbai',
-    'new york': 'new york',
-    'new york city': 'new york',
-    'nyc': 'new york',
-    'ny': 'new york',
-    'san francisco': 'san francisco',
-    'sf': 'san francisco',
-    'bay area': 'san francisco'
-  };
-
-  private computeStringSimilarity(str1: string, str2: string): { score: number; method: string } {
-    const s1 = str1.toLowerCase().trim();
-    const s2 = str2.toLowerCase().trim();
-
-    if (s1 === s2) {
-      return { score: 1.0, method: 'exact' };
+  /**
+   * Reusable unified skill scoring method using O(1) SKILL_INDEX.
+   * Completely avoids fuzzy string similarity, utilizing ontology relationships only.
+   */
+  private calculateSkillScore(
+    candidateSkills: string[],
+    targetSkills: string[],
+    options?: { isCritical?: boolean }
+  ): { score: number; matched: string[]; missing: string[] } {
+    if (!targetSkills || targetSkills.length === 0) {
+      return { score: 100, matched: [], missing: [] };
     }
 
-    // Check if they belong to the same alias group
-    for (const [groupName, aliases] of Object.entries(this.roleAliases)) {
-      const matchesS1 = aliases.some(alias => s1.includes(alias) || alias.includes(s1));
-      const matchesS2 = aliases.some(alias => s2.includes(alias) || alias.includes(s2));
-      if (matchesS1 && matchesS2) {
-        const confidence = s1.includes('software') && s2.includes('sde') ? 0.95 : 0.92;
-        return { score: confidence, method: 'alias mapping' };
+    const normalizedCandidate = candidateSkills.map(s => this.normalizeSkillName(s));
+    
+    let totalMatchValue = 0;
+    const matched: string[] = [];
+    const missing: string[] = [];
+
+    for (const targetSkill of targetSkills) {
+      const normTarget = this.normalizeSkillName(targetSkill);
+      let bestMatchVal = 0;
+
+      // 1. Check exact/normalized match
+      if (normalizedCandidate.includes(normTarget)) {
+        bestMatchVal = 1.0;
+      } else {
+        // 2. Check ontology match
+        const groupTarget = MatchingService.SKILL_INDEX[normTarget];
+        if (groupTarget) {
+          for (const candSkill of normalizedCandidate) {
+            const groupCand = MatchingService.SKILL_INDEX[candSkill];
+            if (groupCand) {
+              if (groupTarget.family === groupCand.family && groupTarget.subfamily === groupCand.subfamily) {
+                bestMatchVal = Math.max(bestMatchVal, 0.8);
+              } else if (groupTarget.family === groupCand.family) {
+                bestMatchVal = Math.max(bestMatchVal, 0.4);
+              }
+            }
+          }
+        }
+      }
+
+      totalMatchValue += bestMatchVal;
+      if (bestMatchVal >= 0.8) {
+        matched.push(targetSkill);
+      } else {
+        missing.push(targetSkill);
       }
     }
 
-    // Fallback: character bigram Dice's Coefficient
-    const getBigrams = (str: string) => {
-      const bigrams = new Set<string>();
-      for (let i = 0; i < str.length - 1; i++) {
-        bigrams.add(str.slice(i, i + 2));
+    const score = Math.round((totalMatchValue / targetSkills.length) * 100);
+    return { score, matched, missing };
+  }
+
+  /**
+   * Domain fit score based on combined family/subfamily match signals.
+   * Same Subfamily = 100, Same Family = 60, Different Family = 0
+   */
+  private calculateDomainScore(
+    userFamily: string | null,
+    userSubfamily: string | null,
+    jobFamily: string | null,
+    jobSubfamily: string | null
+  ): number {
+    if (!userFamily || !jobFamily) {
+      return 0;
+    }
+    if (userFamily === jobFamily) {
+      if (userSubfamily === jobSubfamily) {
+        return 100;
       }
-      return bigrams;
-    };
+      return 60;
+    }
+    return 0;
+  }
 
-    const b1 = getBigrams(s1);
-    const b2 = getBigrams(s2);
+  /**
+   * Infers dominant family/subfamily using precompiled SKILL_INDEX.
+   */
+  private determineFamilyAndSubfamily(text: string, skills: string[]): { family: string | null; subfamily: string | null } {
+    let detectedFamily = detectFamily(text);
+    let detectedSubfamily = detectSubfamily(text);
 
-    if (b1.size === 0 || b2.size === 0) {
-      return { score: 0.0, method: 'bigram overlap' };
+    // If title detection is software or null, look at the skills
+    if (!detectedFamily || detectedFamily === 'software' || !detectedSubfamily) {
+      const familyCounts: Record<string, number> = {};
+      const subfamilyCounts: Record<string, number> = {};
+
+      for (const skill of skills) {
+        const normSkill = this.normalizeSkillName(skill);
+        const group = MatchingService.SKILL_INDEX[normSkill];
+        if (group) {
+          familyCounts[group.family] = (familyCounts[group.family] || 0) + 1;
+          subfamilyCounts[group.subfamily] = (subfamilyCounts[group.subfamily] || 0) + 1;
+        }
+      }
+
+      let bestSkillsFamily: string | null = null;
+      let maxFamilyCount = 0;
+      for (const [fam, cnt] of Object.entries(familyCounts)) {
+        if (cnt > maxFamilyCount) {
+          maxFamilyCount = cnt;
+          bestSkillsFamily = fam;
+        }
+      }
+
+      let bestSkillsSubfamily: string | null = null;
+      let maxSubfamilyCount = 0;
+      for (const [sub, cnt] of Object.entries(subfamilyCounts)) {
+        if (cnt > maxSubfamilyCount) {
+          maxSubfamilyCount = cnt;
+          bestSkillsSubfamily = sub;
+        }
+      }
+
+      if (!detectedFamily || detectedFamily === 'software') {
+        detectedFamily = bestSkillsFamily || detectedFamily || null;
+      }
+      if (!detectedSubfamily) {
+        detectedSubfamily = bestSkillsSubfamily || null;
+      }
     }
 
-    let intersection = 0;
-    for (const b of b1) {
-      if (b2.has(b)) {
-        intersection++;
-      }
-    }
-
-    const dice = (2.0 * intersection) / (b1.size + b2.size);
-    const score = Math.round(dice * 100) / 100;
-    return { score, method: 'fuzzy matching' };
+    return { family: detectedFamily, subfamily: detectedSubfamily };
   }
 
   private normalizeLocation(loc: string): string {
@@ -427,65 +553,78 @@ ${this.stats.solelyExperienceReject}
   }
 
   /**
+   * Location Match Score on 0 to 100 scale.
+   */
+  private calculateLocationScore(profile: UserProfile, reqs: JobRequirements): number {
+    const candidateLocations = (profile.preferences.locations || [])
+      .map(loc => loc.trim().toLowerCase())
+      .filter(Boolean);
+    const isCandidateOpenToRemote = !!profile.preferences.remote;
+    const jobLocLower = (reqs.location || '').toLowerCase();
+    const isJobRemote = !!reqs.remoteAllowed || jobLocLower.includes('remote');
+
+    if (candidateLocations.length === 0) {
+      if (isCandidateOpenToRemote) return 100;
+      return isJobRemote ? 50 : 100;
+    }
+
+    const normJobLoc = this.normalizeLocation(jobLocLower);
+    const hasPhysicalMatch = candidateLocations.some(prefLoc => {
+      const normPrefLoc = this.normalizeLocation(prefLoc);
+      return normJobLoc.includes(normPrefLoc) || normPrefLoc.includes(normJobLoc);
+    });
+
+    if (hasPhysicalMatch) {
+      return 100;
+    }
+
+    if (isJobRemote && isCandidateOpenToRemote) {
+      // Check for country alignment
+      const isCandidateInIndia = candidateLocations.some(loc => 
+        loc.includes('india') || loc.includes('bangalore') || loc.includes('bengaluru') || loc.includes('ahmedabad') || loc.includes('noida') || loc.includes('delhi') || loc.includes('mumbai') || loc.includes('pune')
+      );
+      const isCandidateInCanada = candidateLocations.some(loc => 
+        loc.includes('canada') || loc.includes('ontario') || loc.includes('toronto') || loc.includes('vancouver') || loc.includes('bc') || loc.includes('alberta')
+      );
+      const isCandidateInUS = candidateLocations.some(loc => 
+        loc.includes('usa') || loc.includes('united states') || loc.includes('california') || loc.includes('new york') || loc.includes('texas') || loc.includes('sf') || loc.includes('chicago')
+      );
+
+      let countryMismatch = false;
+      if (isCandidateInIndia) {
+        if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('latam')) {
+          countryMismatch = true;
+        }
+      } else if (isCandidateInCanada) {
+        if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
+          countryMismatch = true;
+        }
+      } else if (isCandidateInUS) {
+        if (jobLocLower.includes('india') || jobLocLower.includes('canada') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
+          countryMismatch = true;
+        }
+      }
+
+      return countryMismatch ? 20 : 100;
+    }
+
+    if (isJobRemote && !isCandidateOpenToRemote) {
+      return 30; // Candidate prefers on-site, job is remote
+    }
+
+    return 0; // On-site job, no physical location match
+  }
+
+  /**
    * Stage 3: Hard Filter Engine (Mandatory constraints check)
+   * Focuses on location, experience, remote, and employment type alignment,
+   * avoiding title false positives which are resolved via ontology in matching.
    */
   private applyHardFilters(profile: UserProfile, reqs: JobRequirements, jobTitle: string, jobDescription: string, jobCompany = 'Unknown'): boolean {
     const titleLower = jobTitle.toLowerCase();
     const descLower = jobDescription.toLowerCase();
 
-    // 1. Role / Search Term Filter using role-family taxonomy and similarity fallback
-    let titlePass = true;
-    if (profile.preferredRoles && profile.preferredRoles.length > 0) {
-      titlePass = profile.preferredRoles.some(role => {
-        const queryFamily = detectFamily(role);
-        const jobFamily = detectFamily(jobTitle);
-
-        let pass = false;
-        let reason = 'family_mismatch';
-
-        if (queryFamily && jobFamily) {
-          if (queryFamily === jobFamily) {
-            pass = true;
-            reason = 'same_family';
-          } else if (isAncestor(queryFamily, jobFamily)) {
-            pass = true;
-            reason = 'ancestor';
-          }
-        }
-
-        if (!pass) {
-          const { score } = this.computeStringSimilarity(jobTitle, role);
-          if (score >= 0.50) {
-            pass = true;
-            reason = 'similarity_match';
-          }
-        }
-
-        this.writeDetailedMatchLog(`
-User Preference:
-${role}
-
-Detected Family:
-${queryFamily || 'None'}
-
-Job Title:
-${jobTitle}
-
-Detected Family:
-${jobFamily || 'None'}
-
-Decision:
-${pass ? 'PASS' : 'REJECT'}
-
-Reason:
-${reason}
-`);
-
-        return pass;
-      });
-    }
-
-    // 2. Seniority & Experience Filter
+    // 1. Seniority & Experience Filter
     let minYearsRequired = reqs.experienceRequired || 0;
     let maxYearsRequired = 100;
     
@@ -535,7 +674,12 @@ ${reason}
       experiencePass = false;
     }
 
-    // 3. Remote & Location constraint checks
+    if (!experiencePass) {
+      this.stats.experienceReject++;
+      return false;
+    }
+
+    // 2. Remote & Location constraint checks
     const candidateLocations = (profile.preferences.locations || [])
       .map(loc => loc.trim().toLowerCase())
       .filter(Boolean);
@@ -546,8 +690,6 @@ ${reason}
 
     let remotePass = true;
     if (!isCandidateOpenToRemote && isJobRemote) {
-      // If the candidate prefers on-site/hybrid (remote: false), we only fail the remote check
-      // if the job does not have a physical location matching their preferred locations.
       if (candidateLocations.length > 0) {
         const normJobLoc = this.normalizeLocation(jobLocLower);
         const hasPhysicalMatch = candidateLocations.some(prefLoc => {
@@ -558,6 +700,11 @@ ${reason}
           remotePass = false;
         }
       }
+    }
+
+    if (!remotePass) {
+      this.stats.remoteReject++;
+      return false;
     }
 
     let locationPass = true;
@@ -585,7 +732,7 @@ ${reason}
               locationPass = false;
             }
           } else if (isCandidateInCanada) {
-            if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe') || jobLocLower.includes('vancouver') || jobLocLower.includes('bc') || jobLocLower.includes('alberta')) {
+            if (jobLocLower.includes('usa') || jobLocLower.includes('united states') || jobLocLower.includes('india') || jobLocLower.includes('uk') || jobLocLower.includes('united kingdom') || jobLocLower.includes('europe')) {
               locationPass = false;
             }
           } else if (isCandidateInUS) {
@@ -603,7 +750,12 @@ ${reason}
       }
     }
 
-    // 4. Employment Type constraint check
+    if (!locationPass) {
+      this.stats.locationReject++;
+      return false;
+    }
+
+    // 3. Employment Type constraint check
     let employmentPass = true;
     if (profile.preferences.employmentTypes && profile.preferences.employmentTypes.length > 0) {
       const jobEmpLower = reqs.employmentType.toLowerCase();
@@ -612,162 +764,14 @@ ${reason}
       );
     }
 
-    const isApproved = titlePass && locationPass && employmentPass && experiencePass && remotePass;
-
-    const rejectReasons: string[] = [];
-    if (!titlePass) rejectReasons.push('TITLE_MISMATCH');
-    if (!locationPass) rejectReasons.push('LOCATION_MISMATCH');
-    if (!experiencePass) rejectReasons.push('EXPERIENCE_MISMATCH');
-    if (!employmentPass) rejectReasons.push('EMPLOYMENT_MISMATCH');
-    if (!remotePass) rejectReasons.push('REMOTE_MISMATCH');
-
-    // Experience checks tracing values
-    const gradYearMatch = (profile.education || []).join(' ').match(/\b(19|20)\d{2}\b/);
-    const graduationYear = gradYearMatch ? gradYearMatch[0] : 'None';
-    
-    // Calculate seniority
-    let seniority = 'Junior';
-    if (profile.experienceYears >= 5) {
-      seniority = 'Senior';
-    } else if (profile.experienceYears >= 2) {
-      seniority = 'Mid';
+    if (!employmentPass) {
+      this.stats.employmentReject++;
+      return false;
     }
 
-    this.writeDetailedMatchLog(`
-================================================
-Job
-title: ${jobTitle}
-company: ${jobCompany}
-location: ${reqs.location || 'Unknown'}
-employment_type: ${reqs.employmentType || 'Unknown'}
-required_experience: ${minYearsRequired}
-
-User Profile
-canonical_role: ${profile.preferredRoles[0] || 'None'}
-target_titles: ${JSON.stringify(profile.preferredRoles || [])}
-experience_years: ${profile.experienceYears}
-locations: ${JSON.stringify(profile.preferences.locations || [])}
-employmentTypes: ${JSON.stringify(profile.preferences.employmentTypes || [])}
-remote: ${profile.preferences.remote}
-
-Checks
-titlePass: ${titlePass}
-locationPass: ${locationPass}
-employmentPass: ${employmentPass}
-experiencePass: ${experiencePass}
-remotePass: ${remotePass}
-
-Final Decision
-${isApproved ? 'APPROVED' : 'REJECTED'}
-
-Reject Reasons
-${rejectReasons.join('\n') || 'None'}
-================================================
-`);
-
-    console.log(`[DECISION] ${isApproved ? 'ACCEPT' : 'REJECT'} | Reason: ${rejectReasons.join(', ') || 'None'} | Title: ${jobTitle}`);
-
-    if (!isApproved) {
-      if (!titlePass) this.stats.titleReject++;
-      if (!locationPass) this.stats.locationReject++;
-      if (!experiencePass) this.stats.experienceReject++;
-      if (!employmentPass) this.stats.employmentReject++;
-      if (!remotePass) this.stats.remoteReject++;
-      
-      const onlyExperienceFailed = titlePass && locationPass && employmentPass && remotePass && !experiencePass;
-      if (onlyExperienceFailed) {
-        this.stats.solelyExperienceReject++;
-      }
-    }
-
-    return isApproved;
+    return true;
   }
 
-  /**
-   * Stage 4: Skill Match Engine with Normalization
-   */
-  private computeSkillScore(candidateSkills: string[], requiredSkills: string[]): SkillScore {
-    if (requiredSkills.length === 0) {
-      return { overlapSkills: [], missingSkills: [], score: 100 };
-    }
-
-    const normalize = (skill: string) => {
-      const clean = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
-      return this.SKILL_MAP[clean] || clean;
-    };
-
-    const normCandidateSkills = new Set(candidateSkills.map(normalize));
-    const normRequiredSkills = requiredSkills.map(normalize);
-
-    const overlapSkills: string[] = [];
-    const missingSkills: string[] = [];
-
-    requiredSkills.forEach((skill, index) => {
-      const normReq = normRequiredSkills[index];
-      if (normCandidateSkills.has(normReq)) {
-        overlapSkills.push(skill);
-      } else {
-        missingSkills.push(skill);
-      }
-    });
-
-    const score = Math.round((overlapSkills.length / requiredSkills.length) * 100);
-
-    return { overlapSkills, missingSkills, score };
-  }
-
-  /**
-   * Stage 6: Embedding Match Engine (Database-level pgvector similarity)
-   */
-  private async computeSemanticScore(userId: number, jobId: string): Promise<SemanticScore> {
-    try {
-      // 1. Retrieve user vector from Qdrant using the correct UUID format
-      const userUuid = QdrantService.stringToUuid(userId.toString());
-      const userRes = await this.qdrantService.getClient().retrieve('user_embeddings', {
-        ids: [userUuid],
-        with_vector: true,
-      });
-
-      if (userRes.length === 0 || !userRes[0].vector) {
-        this.logger.warn(`[MATCHING] User embedding not found in Qdrant for user ID: ${userId}`);
-        return { score: 50 }; // Default neutral fallback
-      }
-
-      const userVector = userRes[0].vector as number[];
-
-      // 2. Search job_embeddings matching the specific jobId payload key
-      const searchRes = await this.qdrantService.getClient().search('job_embeddings', {
-        vector: userVector,
-        filter: {
-          must: [
-            {
-              key: 'jobId',
-              match: {
-                value: jobId,
-              },
-            },
-          ],
-        },
-        limit: 1,
-      });
-
-      if (searchRes.length === 0) {
-        return { score: 50 }; // Default neutral fallback
-      }
-
-      const sim = searchRes[0].score;
-      // Convert similarity range [-1, 1] to a percentage [0, 100]
-      const pctScore = Math.max(0, Math.min(100, sim * 100));
-      return { score: pctScore };
-    } catch (err) {
-      this.logger.error(`[MATCHING] Failed to calculate Qdrant cosine similarity: ${err.message}`);
-      return { score: 0 };
-    }
-  }
-
-  /**
-   * Stage 7: Experience Match Engine (Non-linear scoring)
-   */
   private computeExperienceScore(candidateYears: number, requiredYears: number): ExperienceScore {
     if (candidateYears >= requiredYears) {
       return { requiredYears, candidateYears, score: 100 };
@@ -778,15 +782,12 @@ ${rejectReasons.join('\n') || 'None'}
     return { requiredYears, candidateYears, score };
   }
 
-  /**
-   * Stage 8: Education Match Engine
-   */
   private computeEducationScore(candidateEdu: string[], requiredEdu: string[]): EducationScore {
-    if (requiredEdu.length === 0) {
+    if (!requiredEdu || requiredEdu.length === 0) {
       return { score: 100 };
     }
     if (!candidateEdu || candidateEdu.length === 0) {
-      return { score: 50 }; // Moderate score if candidate has no education info listed
+      return { score: 50 };
     }
 
     const normRequired = requiredEdu.join(' ').toLowerCase();
@@ -796,14 +797,10 @@ ${rejectReasons.join('\n') || 'None'}
       return { score: 100 };
     }
 
-    // Check if candidate education contains key degrees required
     const eduMatches = candidateEdu.some(candEdu => {
       const candEduLower = candEdu.toLowerCase();
-      // Match PhD
       if (normRequired.includes('phd') && candEduLower.includes('phd')) return true;
-      // Match Masters
       if (normRequired.includes('master') && (candEduLower.includes('master') || candEduLower.includes('m.tech') || candEduLower.includes('m.s.'))) return true;
-      // Match Bachelors
       if (normRequired.includes('bachelor') && (candEduLower.includes('bachelor') || candEduLower.includes('b.tech') || candEduLower.includes('b.e.') || candEduLower.includes('b.s.'))) return true;
       return false;
     });
@@ -820,7 +817,6 @@ ${rejectReasons.join('\n') || 'None'}
       const prefRes = await this.db.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
       const skillsRes = await this.db.query('SELECT skill FROM user_skills WHERE user_id = $1', [userId]);
       
-      // Load raw projects/education from profile JSON file or DB if available, fallback to mock lists for matching structure
       const user = userRes.rows[0];
       const pref = prefRes.rows[0];
       const skills = skillsRes.rows.map(r => r.skill);
@@ -831,7 +827,7 @@ ${rejectReasons.join('\n') || 'None'}
         email: user.email,
         skills,
         experienceYears: pref.experience_years,
-        education: ['B.Tech in Computer Science', 'Bachelor Degree'], // Fallback structural profile match lists
+        education: ['B.Tech in Computer Science', 'Bachelor Degree'],
         projects: [],
         achievements: [],
         preferredRoles: pref.preferred_roles,
@@ -851,7 +847,6 @@ ${rejectReasons.join('\n') || 'None'}
   private async getIngestedJobs(): Promise<{ job: Job; reqs: JobRequirements }[]> {
     const list: { job: Job; reqs: JobRequirements }[] = [];
     try {
-      // Retrieve points from Qdrant scroll (limit 500 for matching pool)
       const res = await this.qdrantService.getClient().scroll('job_embeddings', {
         limit: 500,
         with_payload: true,
@@ -873,6 +868,7 @@ ${rejectReasons.join('\n') || 'None'}
             applyUrl: payload.url,
           },
           reqs: {
+            criticalSkills: payload.criticalSkills || [],
             requiredSkills: payload.requiredSkills || [],
             preferredSkills: payload.preferredSkills || [],
             experienceRequired: payload.experienceRequired || 0,
