@@ -18,8 +18,8 @@ export class AgentController {
   ) {}
 
   @Get('agent/status')
-  getAgentStatus() {
-    return this.agentService.getPipelineStatus();
+  async getAgentStatus() {
+    return await this.agentService.getPipelineStatus();
   }
 
   @Get('agent/results')

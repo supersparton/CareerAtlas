@@ -19,8 +19,8 @@ export class AgentService implements OnApplicationBootstrap {
     @InjectQueue('job-discovery') private readonly discoveryQueue: Queue,
   ) {}
 
-  getPipelineStatus() {
-    return this.coordinator.getActiveRunStatus();
+  async getPipelineStatus() {
+    return await this.coordinator.getActiveRunStatus();
   }
 
   async onApplicationBootstrap() {
@@ -76,9 +76,9 @@ export class AgentService implements OnApplicationBootstrap {
     const runId = await this.db.getNextExecutionId();
     
     // Start run registration in coordinator
-    this.coordinator.startRun(runId, this.activeUserId, searchTerms, locationSearch, 5);
-    this.coordinator.updateStep(runId, 'step-1', 'running');
-    this.coordinator.addLog(runId, 'Syncing profile details and user embedding with PostgreSQL / Supabase...');
+    await this.coordinator.startRun(runId, this.activeUserId, searchTerms, locationSearch, 5);
+    await this.coordinator.updateStep(runId, 'step-1', 'running');
+    await this.coordinator.addLog(runId, 'Syncing profile details and user embedding with PostgreSQL / Supabase...');
 
     let resolvedUserId = this.activeUserId;
     try {
@@ -105,7 +105,7 @@ export class AgentService implements OnApplicationBootstrap {
           // saveProfileToDb updates SQL tables AND updates the Qdrant user_embeddings collection
           await this.profileService.saveProfileToDb(profile);
           this.logger.log(`[ORCHESTRATOR] Synchronized runtime preferences and regenerated Qdrant embeddings for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}, employmentTypes=${JSON.stringify(employmentTypes)}`);
-          this.coordinator.addLog(runId, `Runtime preferences and Qdrant vector embeddings synchronized for User ID ${resolvedUserId}.`);
+          await this.coordinator.addLog(runId, `Runtime preferences and Qdrant vector embeddings synchronized for User ID ${resolvedUserId}.`);
         } else {
           // Fallback SQL upsert if no parsed profile exists yet
           await this.db.query(`
@@ -125,17 +125,17 @@ export class AgentService implements OnApplicationBootstrap {
             0
           ]);
           this.logger.log(`[ORCHESTRATOR] SQL upsert fallback for User ID ${resolvedUserId}: locations=[${locationPref}], remote=${isRemoteOpen}`);
-          this.coordinator.addLog(runId, `Runtime preferences fallback synchronized for User ID ${resolvedUserId}.`);
+          await this.coordinator.addLog(runId, `Runtime preferences fallback synchronized for User ID ${resolvedUserId}.`);
         }
 
         // Update the latest run ID in user preferences
         await this.db.query('UPDATE user_preferences SET latest_run_id = $1 WHERE user_id = $2', [runId, resolvedUserId]);
-        this.coordinator.updateStep(runId, 'step-1', 'success');
+        await this.coordinator.updateStep(runId, 'step-1', 'success');
       }
     } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to resolve active user ID and preferences: ${err.message}`);
-      this.coordinator.failRun(runId, `Failed to sync profile: ${err.message}`);
-      this.coordinator.updateStep(runId, 'step-1', 'error', err.message);
+      await this.coordinator.failRun(runId, `Failed to sync profile: ${err.message}`);
+      await this.coordinator.updateStep(runId, 'step-1', 'error', err.message);
       return;
     }
 
@@ -157,10 +157,10 @@ export class AgentService implements OnApplicationBootstrap {
       });
 
       this.logger.log(`[ORCHESTRATOR] Successfully enqueued job search workflow in BullMQ for run ID: ${runId}`);
-      this.coordinator.addLog(runId, `Workflow enqueued in BullMQ. Queue processing active.`);
+      await this.coordinator.addLog(runId, `Workflow enqueued in BullMQ. Queue processing active.`);
     } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to enqueue workflow to BullMQ: ${err.message}`);
-      this.coordinator.failRun(runId, `Enqueue failed: ${err.message}`);
+      await this.coordinator.failRun(runId, `Enqueue failed: ${err.message}`);
     }
   }
 

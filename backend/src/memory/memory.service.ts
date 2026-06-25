@@ -1,50 +1,41 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as fs from 'fs';
-import * as path from 'path';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import * as crypto from 'crypto';
+import Redis from 'ioredis';
 
 @Injectable()
-export class MemoryService {
+export class MemoryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MemoryService.name);
-  private readonly processedFilePath = path.join(process.cwd(), '..', 'processed_jobs.json');
-  private readonly matchedFilePath = path.join(process.cwd(), '..', 'seen_jobs.json');
+  private redis: Redis | null = null;
 
-  constructor() {
-    this.ensureFilesExist();
-  }
-
-  private ensureFilesExist() {
-    if (!fs.existsSync(this.processedFilePath)) {
-      fs.writeFileSync(this.processedFilePath, JSON.stringify([]), 'utf-8');
-    }
-    if (!fs.existsSync(this.matchedFilePath)) {
-      fs.writeFileSync(this.matchedFilePath, JSON.stringify([]), 'utf-8');
-    }
-  }
-
-  private readHashes(filePath: string): string[] {
+  async onModuleInit() {
+    this.logger.log('[MEMORY] Connecting to Redis for job state cache...');
     try {
-      if (fs.existsSync(filePath)) {
-        const data = fs.readFileSync(filePath, 'utf-8');
-        return JSON.parse(data);
+      const redisUrl = process.env.REDIS_URL;
+      if (redisUrl) {
+        this.redis = new Redis(redisUrl);
+      } else {
+        this.redis = new Redis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379', 10),
+          password: process.env.REDIS_PASSWORD || undefined,
+          username: process.env.REDIS_USERNAME || undefined,
+          tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+        });
       }
-    } catch (e) {
-      this.logger.error(`Failed to read ${path.basename(filePath)}`, e);
+      this.logger.log('[MEMORY] Connected to Redis successfully.');
+    } catch (err) {
+      this.logger.error(`[MEMORY] Failed to connect to Redis: ${err.message}`);
     }
-    return [];
   }
 
-  private saveHash(filePath: string, hash: string) {
-    try {
-      const hashes = this.readHashes(filePath);
-      if (!hashes.includes(hash)) {
-        hashes.push(hash);
-        fs.writeFileSync(filePath, JSON.stringify(hashes, null, 2), 'utf-8');
-        this.logger.log(`[MEMORY] Saved hash to ${path.basename(filePath)}: ${hash}`);
-      }
-    } catch (e) {
-      this.logger.error(`Failed to save hash to ${path.basename(filePath)}`, e);
+  async onModuleDestroy() {
+    if (this.redis) {
+      await this.redis.quit();
     }
+  }
+
+  getRedisClient(): Redis | null {
+    return this.redis;
   }
 
   generateJobHash(company: string, title: string, location: string, source: string): string {
@@ -53,29 +44,57 @@ export class MemoryService {
   }
 
   // LLM Cache check: Has this job description already been scored by LLM?
-  isJobProcessed(company: string, title: string, location: string, source: string): boolean {
-    const hash = this.generateJobHash(company, title, location, source);
-    const result = this.readHashes(this.processedFilePath).includes(hash);
-    if (result) {
-      this.logger.log(`[MEMORY] LLM Cache hit: Skipped scoring for "${title}" at "${company}"`);
+  async isJobProcessed(company: string, title: string, location: string, source: string): Promise<boolean> {
+    if (!this.redis) return false;
+    try {
+      const hash = this.generateJobHash(company, title, location, source);
+      const exists = await this.redis.sismember('careeratlas:processed_jobs', hash);
+      const result = exists === 1;
+      if (result) {
+        this.logger.log(`[MEMORY] LLM Cache hit: Skipped scoring for "${title}" at "${company}"`);
+      }
+      return result;
+    } catch (err) {
+      this.logger.error(`[MEMORY] Redis sismember failed: ${err.message}`);
+      return false;
     }
-    return result;
   }
 
-  markJobAsProcessed(company: string, title: string, location: string, source: string) {
-    const hash = this.generateJobHash(company, title, location, source);
-    this.saveHash(this.processedFilePath, hash);
+  async markJobAsProcessed(company: string, title: string, location: string, source: string): Promise<void> {
+    if (!this.redis) return;
+    try {
+      const hash = this.generateJobHash(company, title, location, source);
+      await this.redis.sadd('careeratlas:processed_jobs', hash);
+      // Set 24 hour TTL to prevent infinite memory growth
+      await this.redis.expire('careeratlas:processed_jobs', 86400);
+      this.logger.log(`[MEMORY] Saved processed job hash to Redis: ${hash}`);
+    } catch (err) {
+      this.logger.error(`[MEMORY] Redis sadd failed: ${err.message}`);
+    }
   }
 
   // Match Storage check: Has this job already been accepted/notified?
-  isJobMatched(company: string, title: string, location: string, source: string): boolean {
-    const hash = this.generateJobHash(company, title, location, source);
-    const result = this.readHashes(this.matchedFilePath).includes(hash);
-    return result;
+  async isJobMatched(company: string, title: string, location: string, source: string): Promise<boolean> {
+    if (!this.redis) return false;
+    try {
+      const hash = this.generateJobHash(company, title, location, source);
+      const exists = await this.redis.sismember('careeratlas:matched_jobs', hash);
+      return exists === 1;
+    } catch (err) {
+      this.logger.error(`[MEMORY] Redis sismember failed: ${err.message}`);
+      return false;
+    }
   }
 
-  markJobAsMatched(company: string, title: string, location: string, source: string) {
-    const hash = this.generateJobHash(company, title, location, source);
-    this.saveHash(this.matchedFilePath, hash);
+  async markJobAsMatched(company: string, title: string, location: string, source: string): Promise<void> {
+    if (!this.redis) return;
+    try {
+      const hash = this.generateJobHash(company, title, location, source);
+      await this.redis.sadd('careeratlas:matched_jobs', hash);
+      await this.redis.expire('careeratlas:matched_jobs', 86400);
+      this.logger.log(`[MEMORY] Saved matched job hash to Redis: ${hash}`);
+    } catch (err) {
+      this.logger.error(`[MEMORY] Redis sadd failed: ${err.message}`);
+    }
   }
 }

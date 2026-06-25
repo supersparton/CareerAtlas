@@ -39,7 +39,7 @@ export class IntelligenceWorker extends WorkerHost {
     const { runId, discoveryPayload, job } = bullJob.data;
 
     try {
-      this.coordinator.updateStep(runId, 'step-4', 'running');
+      await this.coordinator.updateStep(runId, 'step-4', 'running');
 
       // Call the LLM requirements extraction
       const reqs = await this.jobIntelligenceService.extractRequirements(job);
@@ -59,7 +59,7 @@ export class IntelligenceWorker extends WorkerHost {
       this.logger.error(`[INTELLIGENCE-WORKER] Failed to process job intelligence: ${err.message}`);
       
       // Decrement on failure to prevent pipeline freeze
-      const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         await this.matchingQueue.add('evaluate', discoveryPayload);
       }

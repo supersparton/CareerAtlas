@@ -58,7 +58,7 @@ export class ValidationWorker extends WorkerHost {
         this.logger.log(`[VALIDATION-WORKER] Job discarded: "${job.title}" at "${job.company}" (${validationResult.reason})`);
         
         // Decrement remaining jobs counter
-        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
         if (isBatchComplete) {
           this.logger.log(`[VALIDATION-WORKER] Batch complete after discard. Triggering matching...`);
           await this.matchingQueue.add('evaluate', discoveryPayload);
@@ -69,9 +69,9 @@ export class ValidationWorker extends WorkerHost {
       // If bypassed (job already exists in Qdrant store), skip LLM and Embedding extraction completely
       if (validationResult.bypassed) {
         this.logger.log(`[VALIDATION-WORKER] Job "${job.title}" already exists in Qdrant (semantic store). Bypassing Intelligence & Embedding layers.`);
-        this.coordinator.addLog(runId, `Bypassed Intelligence & Embedding for "${job.title}" at ${job.company} (already indexed).`);
+        await this.coordinator.addLog(runId, `Bypassed Intelligence & Embedding for "${job.title}" at ${job.company} (already indexed).`);
         
-        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
         if (isBatchComplete) {
           this.logger.log(`[VALIDATION-WORKER] Batch complete after bypass. Triggering matching...`);
           await this.matchingQueue.add('evaluate', discoveryPayload);
@@ -91,7 +91,7 @@ export class ValidationWorker extends WorkerHost {
     } catch (err) {
       this.logger.error(`[VALIDATION-WORKER] Exception validating job: ${err.message}`);
       // Decrement on failure to avoid pipeline freeze
-      const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         await this.matchingQueue.add('evaluate', discoveryPayload);
       }

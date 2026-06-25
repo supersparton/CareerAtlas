@@ -6,15 +6,16 @@ export class EmbeddingsService implements OnModuleInit {
   private extractor: any = null;
 
   async onModuleInit() {
-    this.logger.log('[EMBEDDINGS] Initializing embedding model Xenova/bge-small-en-v1.5...');
+    this.logger.log('[EMBEDDINGS] Initializing embedding model via fastembed (BGE Small)...');
     try {
-      // Dynamically import @xenova/transformers to prevent issues if it's not installed yet during bootstrap
-      const { pipeline } = await import('@xenova/transformers');
-      this.extractor = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5');
-      this.logger.log('[EMBEDDINGS] Local feature-extraction model loaded successfully.');
+      const { FlagEmbedding, EmbeddingModel } = await import('fastembed');
+      this.extractor = await FlagEmbedding.init({
+        model: EmbeddingModel.BGESmallENV15
+      });
+      this.logger.log('[EMBEDDINGS] fastembed model loaded successfully.');
     } catch (err) {
       this.logger.warn(
-        `[EMBEDDINGS] Failed to load local @xenova/transformers model: ${err.message}. Will use fallback API if available.`
+        `[EMBEDDINGS] Failed to load fastembed model: ${err.message}. Will use fallback API if available.`
       );
     }
   }
@@ -27,14 +28,17 @@ export class EmbeddingsService implements OnModuleInit {
       return new Array(384).fill(0);
     }
 
-    // Attempt local inference first
+    // Attempt fastembed inference first
     if (this.extractor) {
       try {
-        const output = await this.extractor(text, { pooling: 'mean', normalize: true });
-        // The output.data contains the float array of the embedding
-        return Array.from(output.data);
+        const embeddings = this.extractor.embed([text]);
+        for await (const batch of embeddings) {
+          if (batch && batch.length > 0) {
+            return Array.from(batch[0]);
+          }
+        }
       } catch (err) {
-        this.logger.error(`[EMBEDDINGS] Local embedding generation failed: ${err.message}`);
+        this.logger.error(`[EMBEDDINGS] fastembed embedding generation failed: ${err.message}`);
       }
     }
 

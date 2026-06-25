@@ -43,7 +43,7 @@ export class EmbeddingWorker extends WorkerHost {
     const { runId, discoveryPayload, job, requirements } = bullJob.data;
 
     try {
-      this.coordinator.updateStep(runId, 'step-5', 'running');
+      await this.coordinator.updateStep(runId, 'step-5', 'running');
 
       // Generate job description embedding text
       const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${requirements.location}\nRequired Skills: ${requirements.requiredSkills.join(', ')}\nDescription: ${job.description}`;
@@ -55,10 +55,10 @@ export class EmbeddingWorker extends WorkerHost {
       await this.jobIntelligenceService.saveJobToDb(job, requirements, embedding);
 
       // Mark as processed in local MemoryService cache
-      this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
+      await this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
 
       // Decrement the remaining jobs counter in coordinator
-      const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         this.logger.log(`[EMBEDDING-WORKER] Batch complete. Triggering matching queue evaluation for run: ${runId}`);
         await this.matchingQueue.add('evaluate', discoveryPayload);
@@ -69,7 +69,7 @@ export class EmbeddingWorker extends WorkerHost {
       this.logger.error(`[EMBEDDING-WORKER] Failed to embed and save job: ${err.message}`);
       
       // Decrement on failure to prevent pipeline freeze
-      const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         await this.matchingQueue.add('evaluate', discoveryPayload);
       }

@@ -43,8 +43,8 @@ export class DiscoveryWorker extends WorkerHost {
     const searchTerm = searchTerms[activeTermIndex] || '';
     
     this.logger.log(`[DISCOVERY-WORKER] Starting run ${runId} cycle ${currentCycle} for term "${searchTerm}"...`);
-    this.coordinator.updateStep(runId, 'step-2', 'running');
-    this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Crawling for term "${searchTerm}" (Page ${page})...`);
+    await this.coordinator.updateStep(runId, 'step-2', 'running');
+    await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Crawling for term "${searchTerm}" (Page ${page})...`);
 
     try {
       // Run discovery agents in parallel
@@ -115,12 +115,12 @@ export class DiscoveryWorker extends WorkerHost {
         }
       }
 
-      this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Scraped ${rawScrapedJobs.length} raw jobs.`);
-      this.coordinator.updateStep(runId, 'step-2', 'success');
+      await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Scraped ${rawScrapedJobs.length} raw jobs.`);
+      await this.coordinator.updateStep(runId, 'step-2', 'success');
 
       if (rawScrapedJobs.length === 0) {
         this.logger.warn(`[DISCOVERY-WORKER] No raw jobs found in cycle ${currentCycle}. Triggering matching stage immediately.`);
-        this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Warning: No jobs found. Proceeding to matching evaluation.`);
+        await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Warning: No jobs found. Proceeding to matching evaluation.`);
         
         // Enqueue matching job immediately since there are no child jobs to process
         await this.matchingQueue.add('evaluate', job.data);
@@ -128,9 +128,9 @@ export class DiscoveryWorker extends WorkerHost {
       }
 
       // Initialize counter in coordinator
-      this.coordinator.setTotalJobs(runId, rawScrapedJobs.length);
-      this.coordinator.updateStep(runId, 'step-3', 'running');
-      this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Validation starting for ${rawScrapedJobs.length} jobs...`);
+      await this.coordinator.setTotalJobs(runId, rawScrapedJobs.length);
+      await this.coordinator.updateStep(runId, 'step-3', 'running');
+      await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Validation starting for ${rawScrapedJobs.length} jobs...`);
 
       // Enqueue each job for validation
       for (const rawJob of rawScrapedJobs) {
@@ -142,9 +142,9 @@ export class DiscoveryWorker extends WorkerHost {
       }
 
       return { count: rawScrapedJobs.length };
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[DISCOVERY-WORKER] Failed to ingest jobs: ${err.message}`, err.stack);
-      this.coordinator.failRun(runId, `Discovery stage failed: ${err.message}`);
+      await this.coordinator.failRun(runId, `Discovery stage failed: ${err.message}`);
       throw err;
     }
   }

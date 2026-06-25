@@ -41,8 +41,8 @@ export class MatchingWorker extends WorkerHost {
     const searchTerm = searchTerms[activeTermIndex] || '';
 
     try {
-      this.coordinator.updateStep(runId, 'step-6', 'running');
-      this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Running Vector Search, Hard Filters, and matching algorithms for "${searchTerm}"...`);
+      await this.coordinator.updateStep(runId, 'step-6', 'running');
+      await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Running Vector Search, Hard Filters, and matching algorithms for "${searchTerm}"...`);
 
       // Run Matching & Ranking engine against Qdrant
       const currentMatches = await this.matchingService.matchAndRankJobs(userId, limit);
@@ -72,11 +72,11 @@ export class MatchingWorker extends WorkerHost {
           const nextCycle = currentCycle + 1;
           const nextPage = page + 1;
 
-          this.coordinator.addLog(
+          await this.coordinator.addLog(
             runId,
             `[Cycle ${currentCycle}] Found ${rankedMatches.length}/${limit} matches. Starting Cycle ${nextCycle} for "${searchTerm}"...`
           );
-          this.coordinator.updateStep(runId, 'step-6', 'success');
+          await this.coordinator.updateStep(runId, 'step-6', 'success');
 
           await this.discoveryQueue.add('discover-jobs', {
             ...payload,
@@ -91,11 +91,11 @@ export class MatchingWorker extends WorkerHost {
           const nextTermIndex = activeTermIndex + 1;
           const nextTerm = searchTerms[nextTermIndex];
 
-          this.coordinator.addLog(
+          await this.coordinator.addLog(
             runId,
             `[Cycle ${currentCycle}] Completed all cycles for "${searchTerm}". Moving to next search title: "${nextTerm}"...`
           );
-          this.coordinator.updateStep(runId, 'step-6', 'success');
+          await this.coordinator.updateStep(runId, 'step-6', 'success');
 
           await this.discoveryQueue.add('discover-jobs', {
             ...payload,
@@ -110,9 +110,9 @@ export class MatchingWorker extends WorkerHost {
       }
 
       // We either met the limit or reached maxCycles. Perform ranking & notifications.
-      this.coordinator.updateStep(runId, 'step-6', 'success');
-      this.coordinator.updateStep(runId, 'step-7', 'running');
-      this.coordinator.addLog(runId, `Selecting top job matches and generating personalized AI explanations...`);
+      await this.coordinator.updateStep(runId, 'step-6', 'success');
+      await this.coordinator.updateStep(runId, 'step-7', 'running');
+      await this.coordinator.addLog(runId, `Selecting top job matches and generating personalized AI explanations...`);
 
       // Sort and select top jobs up to the requested limit
       const sortedJobs = rankedMatches.sort((a, b) => b.finalScore - a.finalScore);
@@ -198,7 +198,7 @@ export class MatchingWorker extends WorkerHost {
 
           if (insertRes.rowCount === 0) {
             this.logger.log(`[MATCHING-WORKER] Skipping duplicate save: Job "${job.title}" at "${job.company}" already exists in database.`);
-            this.coordinator.addLog(runId, `Skipping duplicate: "${job.title}" at "${job.company}" is already saved.`);
+            await this.coordinator.addLog(runId, `Skipping duplicate: "${job.title}" at "${job.company}" is already saved.`);
             continue;
           }
         } catch (dbErr) {
@@ -206,18 +206,18 @@ export class MatchingWorker extends WorkerHost {
           continue; 
         }
 
-        this.coordinator.addLog(runId, `Recommendation result saved successfully for "${job.title}" at ${job.company}.`);
+        await this.coordinator.addLog(runId, `Recommendation result saved successfully for "${job.title}" at ${job.company}.`);
       }
 
       this.logger.log(`Workflow finalizer completed. Top job matches finalized.`);
 
-      this.coordinator.updateStep(runId, 'step-7', 'success');
-      this.coordinator.completeRun(runId, `Workflow completed successfully. Found ${topJobs.length} matching jobs.`);
+      await this.coordinator.updateStep(runId, 'step-7', 'success');
+      await this.coordinator.completeRun(runId, `Workflow completed successfully. Found ${topJobs.length} matching jobs.`);
 
       return { completed: true, count: topJobs.length };
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[MATCHING-WORKER] Matching worker failed: ${err.message}`, err.stack);
-      this.coordinator.failRun(runId, `Matching stage failed: ${err.message}`);
+      await this.coordinator.failRun(runId, `Matching stage failed: ${err.message}`);
       throw err;
     }
   }

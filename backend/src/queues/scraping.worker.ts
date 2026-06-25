@@ -39,17 +39,29 @@ export class ScrapingWorker extends WorkerHost {
     const { runId, discoveryPayload, job } = bullJob.data;
 
     try {
-      this.coordinator.updateStep(runId, 'step-4', 'running');
-      this.coordinator.addLog(runId, `Deep-scraping full details for "${job.title}" at "${job.company}" using anti-detect browser...`);
+      await this.coordinator.updateStep(runId, 'step-4', 'running');
+      await this.coordinator.addLog(runId, `Deep-scraping full details for "${job.title}" at "${job.company}" using anti-detect browser...`);
 
       let scrapedSuccessful = false;
       if (job.applyUrl) {
         const fullDesc = await this.camoufoxScraperService.scrapeUrl(job.applyUrl);
         if (fullDesc && fullDesc.length > 200) {
+          // Post-scrape expiry check: discard if the scraped description indicates the role is closed/expired
+          const expiredKeywords = /\b(hiring has ended|no longer accepting applications|this job has expired|role is closed)\b/i;
+          if (expiredKeywords.test(fullDesc)) {
+            this.logger.warn(`[SCRAPING-WORKER] Discarding job "${job.title}" at "${job.company}" - Scraped description indicates it is closed/expired.`);
+            await this.coordinator.addLog(runId, `Discarded "${job.title}" at "${job.company}" - Role is closed/expired.`);
+            const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+            if (isBatchComplete) {
+              await this.matchingQueue.add('evaluate', discoveryPayload);
+            }
+            return { success: false, reason: 'Job is closed or expired' };
+          }
+
           job.description = fullDesc;
           scrapedSuccessful = true;
           this.logger.log(`[SCRAPING-WORKER] Successfully enriched job description for "${job.title}"`);
-          this.coordinator.addLog(runId, `Enriched job description for "${job.title}" (${fullDesc.length} chars).`);
+          await this.coordinator.addLog(runId, `Enriched job description for "${job.title}" (${fullDesc.length} chars).`);
         }
       }
 
@@ -57,10 +69,10 @@ export class ScrapingWorker extends WorkerHost {
 
       if (!hasValidDescription) {
         this.logger.warn(`[SCRAPING-WORKER] Discarding job "${job.title}" at "${job.company}" - Description scraping failed and no fallback description is available.`);
-        this.coordinator.addLog(runId, `Discarded "${job.title}" at "${job.company}" - failed to scrape description.`);
+        await this.coordinator.addLog(runId, `Discarded "${job.title}" at "${job.company}" - failed to scrape description.`);
 
         // Decrement remaining jobs counter
-        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
         if (isBatchComplete) {
           this.logger.log(`[SCRAPING-WORKER] Batch complete after discarding invalid job. Triggering matching...`);
           await this.matchingQueue.add('evaluate', discoveryPayload);
@@ -88,7 +100,7 @@ export class ScrapingWorker extends WorkerHost {
           job,
         });
       } else {
-        const isBatchComplete = this.coordinator.decrementRemainingJobs(runId);
+        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
         if (isBatchComplete) {
           await this.matchingQueue.add('evaluate', discoveryPayload);
         }

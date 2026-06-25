@@ -142,8 +142,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         CREATE SEQUENCE IF NOT EXISTS workflow_run_id_seq START WITH 1;
       `);
 
+      // 6. Create indexes for fast retrieval
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_results_user_run ON results(user_id, run_id);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_user_skills_user ON user_skills(user_id);
+      `);
+
       await client.query('COMMIT');
-      this.logger.log('[DATABASE] Database schema initialized successfully.');
+      this.logger.log('[DATABASE] Database schema and indexes initialized successfully.');
     } catch (err) {
       await client.query('ROLLBACK');
       this.logger.error(`[DATABASE] Failed to initialize database schema: ${err.message}`, err.stack);
