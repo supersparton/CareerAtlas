@@ -164,7 +164,7 @@ export class MatchingService {
       if (userRes.length > 0 && userRes[0].vector) {
         userVector = userRes[0].vector as number[];
       }
-    } catch (vectorErr) {
+    } catch (vectorErr: any) {
       this.logger.error(`[MATCHING] Error loading user vector from Qdrant: ${vectorErr.message}`);
     }
 
@@ -211,7 +211,7 @@ export class MatchingService {
           similarity: point.score,
         });
       }
-    } catch (qdrantErr) {
+    } catch (qdrantErr : any) {
       this.logger.error(`[MATCHING] Qdrant search failed: ${qdrantErr.message}`);
       return [];
     }
@@ -374,7 +374,7 @@ ${this.stats.solelyExperienceReject}
           familyScore,
           subFamilyScore,
         });
-      } catch (err) {
+      } catch (err: any) {
         this.logger.error(`[MATCHING] Error scoring job ${job.jobId}: ${err.message}`);
       }
     }
@@ -402,7 +402,7 @@ ${this.stats.solelyExperienceReject}
       }
       const logFile = path.join(outputDir, 'matching_decisions.log');
       fs.appendFileSync(logFile, logText + '\n', 'utf8');
-    } catch (err) {
+    } catch (err: any) {
       // fallback
     }
   }
@@ -837,7 +837,7 @@ ${this.stats.solelyExperienceReject}
           employmentTypes: pref.employment_types,
         },
       };
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[MATCHING] DB Error loading user profile: ${err.message}`);
       return null;
     }
@@ -878,7 +878,7 @@ ${this.stats.solelyExperienceReject}
           },
         });
       }
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[MATCHING] Qdrant Error loading ingested jobs: ${err.message}`);
     }
     return list;

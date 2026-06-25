@@ -180,6 +180,92 @@ export const GENERIC_SOFTWARE_TITLES = [
   "product engineer"
 ];
 
+export const ROLE_ALIASES: Record<string, string[]> = {
+  'software': [
+    'software engineer',
+    'software developer',
+    'sde',
+    'sde i',
+    'sde-ii',
+    'sde-2',
+    'sde-1',
+    'sde-3',
+    'sde iii',
+    'senior software engineer',
+    'junior software engineer',
+    'application engineer',
+    'member of technical staff',
+    'mts',
+    'technical staff member',
+    'software development engineer',
+    'fullstack engineer',
+    'full stack developer',
+    'full-stack developer',
+    'full stack engineer',
+    'fullstack developer',
+    'full-stack engineer'
+  ],
+  'backend': [
+    'backend engineer',
+    'backend developer',
+    'node.js developer',
+    'node developer',
+    'python backend developer',
+    'python developer',
+    'java developer',
+    'java backend developer',
+    'golang developer',
+    'golang backend developer',
+    'go developer',
+    'c# developer',
+    'dot net developer',
+    '.net developer',
+    'backend software engineer'
+  ],
+  'frontend': [
+    'frontend engineer',
+    'frontend developer',
+    'front-end developer',
+    'front end developer',
+    'react developer',
+    'react.js developer',
+    'vue developer',
+    'angular developer',
+    'ui engineer',
+    'ui developer',
+    'frontend software engineer'
+  ],
+  'data': [
+    'data analyst',
+    'business analyst',
+    'analytics engineer',
+    'product analyst',
+    'data analytics',
+    'data engineer',
+    'data platform engineer',
+    'big data engineer',
+    'data scientist',
+    'machine learning engineer',
+    'ml engineer',
+    'ai engineer',
+    'applied scientist'
+  ],
+  'devops': [
+    'devops engineer',
+    'site reliability engineer',
+    'sre',
+    'platform engineer',
+    'cloud engineer',
+    'systems engineer'
+  ],
+  'product': [
+    'product manager',
+    'pm',
+    'associate product manager',
+    'technical product manager'
+  ]
+};
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -230,17 +316,25 @@ export function detectRole(
 }
 
 export function detectFamily(text: string): string | null {
-
   const role = detectRole(text);
-
   if (role) {
     return role.family;
   }
 
   const title = cleanTitleForTaxonomy(text).toLowerCase();
 
-  for (const generic of GENERIC_SOFTWARE_TITLES) {
+  // 1. Check role aliases map
+  for (const [family, aliases] of Object.entries(ROLE_ALIASES)) {
+    for (const alias of aliases) {
+      const regex = new RegExp(`\\b${escapeRegExp(alias.toLowerCase())}\\b`, "i");
+      if (regex.test(title)) {
+        return family;
+      }
+    }
+  }
 
+  // 2. Fallback to generic software titles
+  for (const generic of GENERIC_SOFTWARE_TITLES) {
     if (title.includes(generic.toLowerCase())) {
       return "software";
     }
@@ -252,10 +346,36 @@ export function detectFamily(text: string): string | null {
 export function detectSubfamily(
   text: string
 ): string | null {
-
   const role = detectRole(text);
+  if (role) {
+    return role.subfamily;
+  }
 
-  return role?.subfamily ?? null;
+  const title = cleanTitleForTaxonomy(text).toLowerCase();
+
+  // Custom checks for subfamilies based on keywords in title
+  if (title.includes('android') || title.includes('kotlin')) return 'android';
+  if (title.includes('ios') || title.includes('swift')) return 'ios';
+  if (title.includes('flutter') || title.includes('react native') || title.includes('react-native')) return 'cross_platform';
+  
+  if (title.includes('react') || title.includes('nextjs') || title.includes('next.js')) return 'react';
+  if (title.includes('angular')) return 'angular';
+  if (title.includes('vue') || title.includes('nuxt')) return 'vue';
+  
+  if (title.includes('node') || title.includes('nestjs') || title.includes('express')) return 'node';
+  if (title.includes('python') || title.includes('django') || title.includes('fastapi')) return 'python';
+  if (title.includes('java') || title.includes('spring')) return 'java';
+  if (title.includes('golang') || title.includes('go developer')) return 'golang';
+  if (title.includes('c#') || title.includes('.net') || title.includes('dotnet')) return 'dotnet';
+  
+  if (title.includes('machine learning') || title.includes('ml ') || title.includes('ai ') || title.includes('deep learning')) return 'machine_learning';
+  if (title.includes('data engineer') || title.includes('big data')) return 'data_engineering';
+  if (title.includes('data analyst') || title.includes('business analyst') || title.includes('statistician')) return 'data_science';
+  
+  if (title.includes('cloud') || title.includes('aws') || title.includes('azure') || title.includes('gcp')) return 'cloud';
+  if (title.includes('devops') || title.includes('sre') || title.includes('site reliability') || title.includes('infrastructure')) return 'infrastructure';
+
+  return null;
 }
 
 export function getMatchedSkills(

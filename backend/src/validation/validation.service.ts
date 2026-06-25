@@ -3,7 +3,7 @@
   import { MemoryService } from '../memory/memory.service';
   import { Job } from '../discovery/discovery.service';
   import { QdrantService } from '../vector-store/qdrant.service';
-
+  import { ROLE_ONTOLOGY, detectFamily, detectSubfamily } from 'src/matching/roleTaxonomy';
   @Injectable()
   export class ValidationService {
     private readonly logger = new Logger(ValidationService.name);
@@ -64,13 +64,8 @@
         }
 
         // 4. Check Title Relevance
-        if (searchTerm && !this.isTitleRelevant(job.title, searchTerm)) {
+        if (searchTerm && !this.isJobRelevant(job.title, searchTerm)) {
           return { valid: false, reason: `Irrelevant title for search: "${searchTerm}"` };
-        }
-
-        // 5. Check Location Relevance
-        if (profile && !this.isLocationRelevant(job.location, profile)) {
-          return { valid: false, reason: `Location "${job.location}" doesn't match candidate preferences` };
         }
 
         // 6. Check if job already has vector embeddings in Qdrant
@@ -82,98 +77,6 @@
         return { valid: false, reason: `Error: ${err.message}` };
       }
     }
-
-    private readonly roleAliases: { [key: string]: string[] } = {
-      'software engineer': [
-        'software engineer',
-        'software developer',
-        'sde',
-        'sde i',
-        'sde-ii',
-        'sde-2',
-        'sde-1',
-        'sde-3',
-        'sde iii',
-        'senior software engineer',
-        'junior software engineer',
-        'application engineer',
-        'member of technical staff',
-        'mts',
-        'technical staff member',
-        'software development engineer'
-      ],
-      'backend engineer': [
-        'backend engineer',
-        'backend developer',
-        'node.js developer',
-        'node developer',
-        'python backend developer',
-        'python developer',
-        'java developer',
-        'java backend developer',
-        'golang developer',
-        'golang backend developer',
-        'go developer',
-        'c# developer',
-        'dot net developer',
-        '.net developer',
-        'backend software engineer'
-      ],
-      'frontend engineer': [
-        'frontend engineer',
-        'frontend developer',
-        'front-end developer',
-        'front end developer',
-        'react developer',
-        'react.js developer',
-        'vue developer',
-        'angular developer',
-        'ui engineer',
-        'ui developer',
-        'frontend software engineer'
-      ],
-      'fullstack engineer': [
-        'fullstack engineer',
-        'full stack developer',
-        'full-stack developer',
-        'full stack engineer',
-        'fullstack developer'
-      ],
-      'data analyst': [
-        'data analyst',
-        'business analyst',
-        'analytics engineer',
-        'product analyst',
-        'data analytics'
-      ],
-      'data engineer': [
-        'data engineer',
-        'data platform engineer',
-        'big data engineer',
-        'analytics engineer'
-      ],
-      'data scientist': [
-        'data scientist',
-        'machine learning engineer',
-        'ml engineer',
-        'ai engineer',
-        'applied scientist'
-      ],
-      'devops engineer': [
-        'devops engineer',
-        'site reliability engineer',
-        'sre',
-        'platform engineer',
-        'cloud engineer',
-        'systems engineer'
-      ],
-      'product manager': [
-        'product manager',
-        'pm',
-        'associate product manager',
-        'technical product manager'
-      ]
-    };
 
     private readonly locationSynonyms: { [key: string]: string } = {
       'bangalore': 'bengaluru',
@@ -191,77 +94,45 @@
       'bay area': 'san francisco'
     };
 
-    private computeStringSimilarity(str1: string, str2: string): { score: number; method: string } {
-      const s1 = str1.toLowerCase().trim();
-      const s2 = str2.toLowerCase().trim();
-
-      if (s1 === s2) {
-        return { score: 1.0, method: 'exact' };
-      }
-
-      // Check if they belong to the same alias group
-      for (const [groupName, aliases] of Object.entries(this.roleAliases)) {
-        const matchesS1 = aliases.some(alias => s1.includes(alias) || alias.includes(s1));
-        const matchesS2 = aliases.some(alias => s2.includes(alias) || alias.includes(s2));
-        if (matchesS1 && matchesS2) {
-          const confidence = s1.includes('software') && s2.includes('sde') ? 0.95 : 0.92;
-          return { score: confidence, method: 'alias mapping' };
-        }
-      }
-
-      // Fallback: character bigram Dice's Coefficient
-      const getBigrams = (str: string) => {
-        const bigrams = new Set<string>();
-        for (let i = 0; i < str.length - 1; i++) {
-          bigrams.add(str.slice(i, i + 2));
-        }
-        return bigrams;
-      };
-
-      const b1 = getBigrams(s1);
-      const b2 = getBigrams(s2);
-
-      if (b1.size === 0 || b2.size === 0) {
-        return { score: 0.0, method: 'bigram overlap' };
-      }
-
-      let intersection = 0;
-      for (const b of b1) {
-        if (b2.has(b)) {
-          intersection++;
-        }
-      }
-
-      const dice = (2.0 * intersection) / (b1.size + b2.size);
-      const score = Math.round(dice * 100) / 100;
-      return { score, method: 'fuzzy matching' };
-    }
-
-    private isTitleRelevant(jobTitle: string, searchTerm: string): boolean {
+    private isJobRelevant(jobTitle: string, searchTerm: string): boolean {
       const titleLower = jobTitle.toLowerCase();
-      const searchLower = searchTerm.toLowerCase();
+      const searchJobLower = searchTerm.toLowerCase();
 
       // Check negations first
-      const negativeKeywords = ['sales', 'marketing', 'recruiter', 'hr', 'accountant', 'ticketing', 'travel', 'admin', 'writer', 'seo'];
-      const hasNegative = negativeKeywords.some(neg => {
-        return titleLower.includes(neg) && !searchLower.includes(neg);
+      const irrelevantKeywords = ['sales', 'marketing', 'recruiter', 'hr', 'accountant', 'ticketing', 'travel', 'admin', 'writer', 'seo'];
+      const hasNegative = irrelevantKeywords.some(neg => {
+        return titleLower.includes(neg) && !searchJobLower.includes(neg);
       });
       if (hasNegative) {
-        this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected due to negative keyword`);
+        this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected due to non-technical keyword`);
         return false;
       }
 
-      const { score, method } = this.computeStringSimilarity(jobTitle, searchTerm);
+      const titleFamily = detectFamily(titleLower);
+      const searchJobFamily = detectFamily(searchJobLower);
 
-      if (score >= 0.50) {
-        this.logger.log(`[VALIDATION] "${searchTerm}" matched "${jobTitle}" via ${method} | confidence = ${score}`);
+      // Add software engineering (family 'software') as generic opening
+      if (titleFamily === 'software') {
         return true;
       }
 
-      this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected for search "${searchTerm}" (confidence = ${score})`);
+      // If families match, it's relevant
+      if (titleFamily === searchJobFamily && titleFamily !== null) {
+        return true;
+      }
+
+      // If one of them is null, we can do a simple substring comparison fallback to be safe
+      if (titleFamily === null || searchJobFamily === null) {
+        // If search term is a substring of the title, let it pass
+        if (titleLower.includes(searchJobLower) || searchJobLower.includes(titleLower)) {
+          return true;
+        }
+      }
+
+      this.logger.log(`[VALIDATION] Title "${jobTitle}" rejected due to family mismatch: titleFamily=${titleFamily}, searchFamily=${searchJobFamily}`);
       return false;
     }
-
+   
     private normalizeLocation(loc: string): string {
       let l = loc.toLowerCase().trim();
       l = l.replace(/[^a-z0-9\s]/g, '');

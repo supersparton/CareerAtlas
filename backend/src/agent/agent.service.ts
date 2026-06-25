@@ -54,7 +54,7 @@ export class AgentService implements OnApplicationBootstrap {
       } else {
         this.logger.warn('[ORCHESTRATOR] No active profile found in profile.json to sync. Waiting for resume upload.');
       }
-    } catch (err) {
+    } catch (err : any) {
       this.logger.error(`[ORCHESTRATOR] Failed to sync profile.json to database on startup: ${err.message}`);
     }
   }
@@ -132,7 +132,7 @@ export class AgentService implements OnApplicationBootstrap {
         await this.db.query('UPDATE user_preferences SET latest_run_id = $1 WHERE user_id = $2', [runId, resolvedUserId]);
         this.coordinator.updateStep(runId, 'step-1', 'success');
       }
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to resolve active user ID and preferences: ${err.message}`);
       this.coordinator.failRun(runId, `Failed to sync profile: ${err.message}`);
       this.coordinator.updateStep(runId, 'step-1', 'error', err.message);
@@ -158,7 +158,7 @@ export class AgentService implements OnApplicationBootstrap {
 
       this.logger.log(`[ORCHESTRATOR] Successfully enqueued job search workflow in BullMQ for run ID: ${runId}`);
       this.coordinator.addLog(runId, `Workflow enqueued in BullMQ. Queue processing active.`);
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to enqueue workflow to BullMQ: ${err.message}`);
       this.coordinator.failRun(runId, `Enqueue failed: ${err.message}`);
     }
@@ -190,7 +190,7 @@ export class AgentService implements OnApplicationBootstrap {
       `, [resolvedUserId, latestRunId]);
 
       return resultsRes.rows;
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to retrieve workflow results from DB: ${err.message}`);
       return [];
     }
@@ -216,7 +216,7 @@ export class AgentService implements OnApplicationBootstrap {
       fs.writeFileSync(processedFilePath, JSON.stringify([]), 'utf-8');
       fs.writeFileSync(matchedFilePath, JSON.stringify([]), 'utf-8');
       this.logger.log('[ORCHESTRATOR] Reset processed_jobs.json and seen_jobs.json caches.');
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[ORCHESTRATOR] Failed to clear history: ${err.message}`);
       throw err;
     }
