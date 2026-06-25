@@ -26,6 +26,20 @@
       h.forEach((v, k) => { requestHeaders[k] = v; });
     }
 
+    // Collect request body (payload)
+    let payload = null;
+    if (init.body) {
+      if (typeof init.body === 'string') {
+        payload = init.body;
+      } else if (init.body instanceof URLSearchParams) {
+        payload = init.body.toString();
+      } else {
+        try {
+          payload = JSON.stringify(init.body);
+        } catch (e) {}
+      }
+    }
+
     let response;
     try {
       response = await originalFetch(...args);
@@ -38,13 +52,14 @@
       const contentType = clone.headers.get('content-type') || '';
       const statusCode = clone.status;
 
-      // Only intercept JSON responses
+      // Only intercept JSON/JS responses
       if (contentType.includes('json') || contentType.includes('javascript')) {
         clone.text().then((body) => {
           dispatch({
             requestUrl: url,
             method: method.toUpperCase(),
             requestHeaders,
+            payload,
             responseBody: body,
             contentType,
             statusCode
@@ -63,6 +78,7 @@
     let _method = 'GET';
     let _url = '';
     const _requestHeaders = {};
+    let _payload = null;
 
     const origOpen = xhr.open.bind(xhr);
     xhr.open = function (method, url, ...rest) {
@@ -77,6 +93,20 @@
       return origSetHeader(k, v);
     };
 
+    const origSend = xhr.send.bind(xhr);
+    xhr.send = function (body) {
+      if (body) {
+        if (typeof body === 'string') {
+          _payload = body;
+        } else {
+          try {
+            _payload = JSON.stringify(body);
+          } catch (e) {}
+        }
+      }
+      return origSend(body);
+    };
+
     xhr.addEventListener('load', function () {
       try {
         const contentType = xhr.getResponseHeader('content-type') || '';
@@ -88,6 +118,7 @@
             requestUrl: _url,
             method: _method,
             requestHeaders: _requestHeaders,
+            payload: _payload,
             responseBody: xhr.responseText,
             contentType,
             statusCode

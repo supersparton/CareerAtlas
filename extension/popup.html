@@ -2,166 +2,581 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>CareerOS Watcher</title>
+  <title>CareerOS Discovery Assistant</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 380px;
-      min-height: 480px;
-      background: #0a0a0f;
+      width: 420px;
+      min-height: 520px;
+      background: #09090e;
       color: #e4e4e7;
-      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       font-size: 13px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
     }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #0c0c14; }
+    ::-webkit-scrollbar-thumb { background: #27273a; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f56; }
 
     /* Header */
     .header {
-      background: linear-gradient(135deg, #0f172a 0%, #1a1a2e 100%);
-      border-bottom: 1px solid #1c1c2e;
-      padding: 12px 14px;
+      background: linear-gradient(135deg, #0d0d18 0%, #151526 100%);
+      border-bottom: 1px solid #1f1f33;
+      padding: 14px 16px;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
-    .header-logo { font-size: 18px; }
-    .header-title { font-size: 13px; font-weight: 700; color: #fff; }
-    .header-sub { font-size: 9px; color: #52525b; margin-top: 1px; }
+    .header-logo {
+      font-size: 22px;
+      animation: pulse 2s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.8; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.05); }
+    }
+    .header-title { font-size: 14px; font-weight: 800; color: #fff; letter-spacing: 0.5px; }
+    .header-sub { font-size: 10px; color: #71717a; margin-top: 1px; }
     .status-dot {
       width: 8px; height: 8px; border-radius: 50%;
       background: #ef4444; margin-left: auto; flex-shrink: 0;
-      box-shadow: 0 0 6px #ef4444; transition: all .3s;
+      box-shadow: 0 0 8px #ef4444; transition: all .3s;
     }
-    .status-dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .status-dot.active { background: #10b981; box-shadow: 0 0 8px #10b981; }
 
-    /* Sections */
-    .section { padding: 12px 14px; border-bottom: 1px solid #18181b; }
+    /* Tab Switcher */
+    .tabs {
+      display: flex;
+      background: #0f0f1b;
+      border-bottom: 1px solid #1f1f33;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      background: transparent;
+      border: none;
+      color: #71717a;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+    }
+    .tab-btn.active {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.04);
+      border-bottom-color: #10b981;
+    }
+    .tab-btn:hover:not(.active) {
+      color: #d4d4d8;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    /* Content Area */
+    .content-container {
+      flex: 1;
+      padding: 14px;
+      overflow-y: auto;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
     .label {
-      font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
-      color: #52525b; font-weight: 600; margin-bottom: 5px;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #71717a;
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: block;
     }
 
-    /* Inputs */
-    select, input[type=text] {
-      width: 100%; background: #111118;
-      border: 1px solid #27272a; border-radius: 7px;
-      padding: 7px 10px; color: #e4e4e7;
-      font-size: 12px; outline: none; transition: border-color .2s;
+    /* Card Layouts */
+    .card {
+      background: #0f0f18;
+      border: 1px solid #1f1f30;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
     }
-    select:focus, input:focus { border-color: #6366f1; }
+    .card-title {
+      font-weight: 700;
+      color: #fff;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    /* Forms */
+    .form-group { margin-bottom: 12px; }
+    select, input[type=text] {
+      width: 100%;
+      background: #08080f;
+      border: 1px solid #27273f;
+      border-radius: 8px;
+      padding: 8px 11px;
+      color: #e4e4e7;
+      font-size: 12px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    select:focus, input:focus {
+      border-color: #10b981;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+    }
 
     /* Buttons */
     .btn {
-      width: 100%; padding: 9px; border-radius: 8px;
-      font-size: 12px; font-weight: 700; cursor: pointer;
-      border: none; transition: all .2s;
-      display: flex; align-items: center; justify-content: center; gap: 6px;
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
-    .btn-primary { background: #6366f1; color: #fff; margin-top: 8px; }
-    .btn-primary:hover { background: #818cf8; }
-    .btn-danger { background: #2d1515; color: #f87171; border: 1px solid #451a1a; margin-top: 6px; }
-    .btn-danger:hover { background: #3b1f1f; }
+    .btn-primary { background: #10b981; color: #fff; }
+    .btn-primary:hover { background: #059669; }
+    .btn-danger { background: #2a1212; color: #f87171; border: 1px solid #471818; }
+    .btn-danger:hover { background: #3b1818; }
+    .btn-secondary { background: #18182b; color: #a1a1aa; border: 1px solid #27273f; }
+    .btn-secondary:hover { background: #22223b; color: #fff; }
 
-    /* Watching banner */
-    #watching-banner {
+    /* Active Watch State */
+    .monitoring-status-card {
+      background: rgba(16, 185, 129, 0.05);
+      border: 1px dashed rgba(16, 185, 129, 0.3);
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .status-text {
+      font-size: 12px;
+      color: #10b981;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-sub {
+      font-size: 10px;
+      color: #a1a1aa;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .metric-card {
+      background: #0f0f18;
+      border: 1px solid #1f1f33;
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .metric-val {
+      font-size: 16px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .metric-val.green { color: #10b981; }
+    .metric-val.amber { color: #f59e0b; }
+    .metric-val.red { color: #f87171; }
+    .metric-lbl {
+      font-size: 9px;
+      text-transform: uppercase;
+      color: #71717a;
+      margin-top: 2px;
+      font-weight: 600;
+    }
+
+    /* Live ignored reason banner */
+    .ignored-banner {
+      background: #120e0e;
+      border: 1px solid #2d1818;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 10px;
+      color: #f87171;
+      margin-bottom: 14px;
+      font-family: monospace;
+      word-break: break-all;
+    }
+
+    /* Candidate Cards */
+    .candidates-header {
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .candidates-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .candidate-card {
+      background: #0f0f1c;
+      border: 1px solid #222238;
+      border-radius: 9px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .candidate-card:hover {
+      border-color: #3b3b5c;
+    }
+    .candidate-header {
+      padding: 10px 12px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .candidate-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .candidate-url {
+      font-family: monospace;
+      font-size: 11px;
+      color: #38bdf8;
+      word-break: break-all;
+      flex: 1;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .candidate-badges {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .badge {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .badge-method { background: #1c1c38; color: #a5b4fc; }
+    .badge-provider { background: #022c22; color: #34d399; }
+    .badge-conf { background: #1e1b4b; color: #c7d2fe; }
+
+    .candidate-sub {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #71717a;
+    }
+
+    /* Expanded Inspect Details */
+    .candidate-details {
       display: none;
-      background: #052e16; border: 1px solid #14532d; border-radius: 8px;
-      padding: 8px 11px; margin-top: 8px; font-size: 11px; color: #4ade80; line-height: 1.5;
+      background: #09090f;
+      border-top: 1px solid #1c1c2e;
+      padding: 12px;
     }
-    #watching-banner.visible { display: block; }
-
-    /* Endpoints */
-    #endpoints-log { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
-    .endpoint-card {
-      background: #111118; border: 1px solid #27272a; border-radius: 7px; padding: 7px 9px;
-      animation: slideIn .25s ease;
+    .candidate-details.active { display: block; }
+    
+    .detail-section { margin-bottom: 8px; }
+    .detail-label {
+      font-size: 9px;
+      color: #52525b;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 3px;
     }
-    .endpoint-card.success { border-color: #14532d; }
-    @keyframes slideIn { from { opacity:0; transform: translateY(-3px); } to { opacity:1; transform: translateY(0); } }
-    .endpoint-url { font-family: monospace; font-size: 10px; color: #a3e635; word-break: break-all; margin-bottom: 3px; }
-    .endpoint-meta { font-size: 10px; color: #52525b; }
-    .endpoint-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px; font-weight: 700; margin-top: 3px; }
-    .badge-api { background: #14532d; color: #4ade80; }
-
-    /* Empty */
-    .empty { text-align: center; padding: 16px 10px; color: #3f3f46; font-size: 11px; line-height: 1.6; }
-    .empty-icon { font-size: 24px; margin-bottom: 6px; }
-
-    /* Settings row */
-    .settings-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-    .settings-row input { flex: 1; }
-    .btn-sm {
-      padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;
-      background: #1c1c28; border: 1px solid #27272a; color: #a1a1aa; cursor: pointer; white-space: nowrap;
+    .detail-code {
+      font-family: monospace;
+      font-size: 10px;
+      background: #05050a;
+      border: 1px solid #1a1a2e;
+      border-radius: 5px;
+      padding: 6px 8px;
+      color: #d4d4d8;
+      max-height: 80px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
-    .btn-sm:hover { background: #27272a; color: #fff; }
 
-    /* Status bar */
-    .status-bar { font-size: 10px; color: #52525b; margin-top: 5px; }
-    .status-bar span { color: #6366f1; }
+    .candidate-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .btn-sm-action {
+      flex: 1;
+      padding: 6px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: center;
+      border: none;
+    }
+    .btn-confirm { background: #10b981; color: #fff; }
+    .btn-confirm:hover { background: #059669; }
+    .btn-reject { background: #271c1c; color: #f87171; border: 1px solid #4a2b2b; }
+    .btn-reject:hover { background: #3d2525; }
+
+    /* Developer debug panel details */
+    .debug-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .debug-row {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid #1c1c2a;
+      padding-bottom: 6px;
+    }
+    .debug-label { color: #71717a; font-weight: 600; }
+    .debug-value { color: #fff; font-weight: 700; font-family: monospace; }
+    .debug-pre {
+      font-family: monospace;
+      font-size: 10px;
+      background: #050508;
+      border: 1px solid #1a1a2e;
+      border-radius: 6px;
+      padding: 10px;
+      color: #a1a1aa;
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Empty / Prompt States */
+    .empty {
+      text-align: center;
+      padding: 30px 14px;
+      color: #71717a;
+    }
+    .empty-icon { font-size: 32px; margin-bottom: 8px; }
+    .empty-txt { font-size: 12px; line-height: 1.5; }
 
     /* Footer */
-    .footer { padding: 7px 14px; font-size: 10px; color: #3f3f46; display: flex; justify-content: space-between; }
+    .footer {
+      padding: 8px 14px;
+      font-size: 10px;
+      color: #3f3f46;
+      border-top: 1px solid #161626;
+      background: #07070a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .footer span { font-weight: 600; }
   </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-logo">🔭</div>
-  <div>
-    <div class="header-title">CareerOS Watcher</div>
-    <div class="header-sub">Real network intercept · job API discovery</div>
-  </div>
-  <div class="status-dot" id="status-dot"></div>
-</div>
-
-<!-- Company Selector -->
-<div class="section">
-  <div class="label">Select Company to Watch</div>
-  <select id="company-select">
-    <option value="">Loading…</option>
-  </select>
-  <div class="status-bar">Backend: <span id="status-api">connecting…</span></div>
-
-  <div id="watching-banner">
-    ✅ Interceptor active for <strong id="watching-company-name"></strong>.<br>
-    The careers page is loading — network calls will be captured automatically.
-  </div>
-
-  <button class="btn btn-primary" id="start-btn">▶ Start Watching This Company</button>
-  <button class="btn btn-danger" id="stop-btn" style="display:none">⏹ Stop Watching</button>
-</div>
-
-<!-- Live Endpoints -->
-<div class="section">
-  <div class="label">Intercepted Endpoints — Live</div>
-  <div id="endpoints-log">
-    <div class="empty">
-      <div class="empty-icon">📡</div>
-      No endpoints captured yet.<br>
-      Select a company and click <strong>Start Watching</strong>.
+  <!-- Sticky Header -->
+  <div class="header">
+    <div class="header-logo">🔭</div>
+    <div>
+      <div class="header-title">Discovery Assistant</div>
+      <div class="header-sub">CareerOS Network Watcher v1.1</div>
     </div>
+    <div class="status-dot" id="status-dot"></div>
   </div>
-</div>
 
-<!-- Settings -->
-<div class="section">
-  <div class="label">Settings</div>
-
-  <div class="settings-row">
-    <input type="text" id="email-input" placeholder="Your CareerOS email" />
+  <!-- Tab Buttons -->
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-discover">Discover</button>
+    <button class="tab-btn" id="tab-debug">Developer Debug</button>
   </div>
-  <div class="settings-row">
-    <input type="text" id="api-url-input" placeholder="http://localhost:3001" />
-    <button class="btn-sm" id="save-settings-btn">Save</button>
+
+  <!-- Main Scrollable Content Container -->
+  <div class="content-container">
+
+    <!-- ── TAB: DISCOVER ── -->
+    <div class="tab-content active" id="content-discover">
+      
+      <!-- INACTIVE VIEW (Setup Discovery Session) -->
+      <div id="view-inactive">
+        <div class="card">
+          <div class="card-title">Launch Discovery Session</div>
+          
+          <div class="form-group">
+            <span class="label">Select Company</span>
+            <select id="company-select">
+              <option value="">Loading watchlist...</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <span class="label">Custom Career Page URL (Optional)</span>
+            <input type="text" id="custom-url" placeholder="https://company.com/careers" />
+          </div>
+
+          <button class="btn btn-primary" id="start-btn" style="margin-top: 8px;">
+            🔌 Start Discovery
+          </button>
+        </div>
+
+        <!-- Saved/Active watchlists list preview -->
+        <div class="card" style="padding: 10px;">
+          <span class="label">Watchlist Backend Connection</span>
+          <div style="font-size: 11px; display: flex; justify-content: space-between; align-items: center; color: #a1a1aa;">
+            <span>Status:</span>
+            <span id="status-api" style="font-weight: 700; color: #f87171;">connecting…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ACTIVE MONITORING VIEW -->
+      <div id="view-active" style="display: none;">
+        
+        <!-- Current watching company info -->
+        <div class="monitoring-status-card">
+          <div class="status-text">
+            <span class="header-logo" style="font-size:14px; animation: none;">📡</span> 
+            Monitoring: <span id="watching-company-name" style="color: #fff;">...</span>
+          </div>
+          <div class="status-sub">
+            The careers page is open in a new tab. Please browse, scroll, or search on that tab to trigger API requests.
+          </div>
+        </div>
+
+        <!-- Metrics Overview Row -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-val green" id="metric-captured">0</div>
+            <div class="metric-lbl">Captured</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val red" id="metric-ignored">0</div>
+            <div class="metric-lbl">Ignored</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val amber" id="metric-candidates">0</div>
+            <div class="metric-lbl">Candidates</div>
+          </div>
+        </div>
+
+        <!-- Latest Ignored Banner -->
+        <div class="ignored-banner" id="ignored-banner-text">
+          No ignored requests yet.
+        </div>
+
+        <!-- Candidate Ranking List -->
+        <div class="candidates-header">
+          <span>Candidate APIs (Sorted by Confidence)</span>
+        </div>
+
+        <div class="candidates-list" id="candidates-list">
+          <div class="empty">
+            <div class="empty-icon">⏳</div>
+            <div class="empty-txt">
+              Awaiting candidate APIs...<br>
+              Navigate the careers tab to capture requests.
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Stop button -->
+        <button class="btn btn-danger" id="stop-btn" style="margin-top: 16px;">
+          ⏹ Stop Discovery Session
+        </button>
+
+      </div>
+
+    </div>
+
+
+    <!-- ── TAB: DEVELOPER DEBUG ── -->
+    <div class="tab-content" id="content-debug">
+      
+      <!-- Developer Metrics -->
+      <div class="card">
+        <div class="card-title">Session Debug Statistics</div>
+        <div class="debug-grid">
+          <div class="debug-row">
+            <span class="debug-label">Total Requests Handled:</span>
+            <span class="debug-value" id="debug-captured-count">0</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-label">Ignored (Assets/Ads/HTML):</span>
+            <span class="debug-value" id="debug-ignored-count">0</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-label">Valid Job Candidates:</span>
+            <span class="debug-value" id="debug-candidate-count">0</span>
+          </div>
+          <div class="debug-row">
+            <span class="debug-label">Highest Confidence Score:</span>
+            <span class="debug-value" id="debug-highest-conf" style="color: #10b981;">0%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Debug URLs and Previews -->
+      <div class="card">
+        <div class="card-title">Highest Confidence URL</div>
+        <div style="font-family: monospace; font-size: 11px; word-break: break-all; color: #38bdf8; margin-bottom: 12px;" id="debug-highest-url">
+          None
+        </div>
+
+        <div class="card-title">Latest Ignored Detail</div>
+        <div style="font-family: monospace; font-size: 10px; color: #f87171; margin-bottom: 12px; word-break: break-all;" id="debug-ignored-detail">
+          None
+        </div>
+
+        <div class="card-title">Latest JSON Payload Preview</div>
+        <pre class="debug-pre" id="debug-json-preview">None</pre>
+      </div>
+
+      <!-- Settings & Configuration -->
+      <div class="card">
+        <div class="card-title">Discovery settings</div>
+        <div class="form-group">
+          <span class="label">CareerOS Email</span>
+          <input type="text" id="email-input" placeholder="user@careeratlas.com" />
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+          <span class="label">Backend API URL</span>
+          <input type="text" id="api-url-input" placeholder="http://localhost:3001" />
+        </div>
+        <button class="btn btn-secondary" id="save-settings-btn">
+          Save Settings
+        </button>
+      </div>
+
+    </div>
+
   </div>
-  <div style="font-size:10px;color:#3f3f46;margin-top:4px">Email must match what you use on the CareerOS dashboard.</div>
-</div>
 
-<div class="footer">
-  <span id="capture-count">0 endpoints captured</span>
-  <span>CareerOS v1.0</span>
-</div>
+  <!-- Fixed Bottom Footer -->
+  <div class="footer">
+    <span id="footer-status-text">Disconnected</span>
+    <span>CareerOS Engine</span>
+  </div>
 
-<script src="popup.js"></script>
+  <script src="popup.js"></script>
 </body>
 </html>

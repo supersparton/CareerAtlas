@@ -1,55 +1,44 @@
 // content.js — runs in extension context on every page
-// Injects interceptor.js into the page context (so it can patch fetch/XHR)
-// then listens for captured data and relays it to background.js
+// Relays intercepted network data from the page context (MAIN world) to the background worker.
 
-// ── Guard: skip restricted / internal pages ───────────────────────────────────
-const origin = window.location.origin;
-if (
-  origin.startsWith('chrome') ||
-  origin.startsWith('chrome-extension') ||
-  origin.startsWith('about') ||
-  origin.startsWith('devtools')
-) {
-  // Do nothing on extension/browser internal pages
-} else {
-  // ── 1. Inject interceptor.js into the page context ──────────────────────────
-  try {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('interceptor.js');
-    script.onload = () => script.remove();
-    (document.head || document.documentElement).appendChild(script);
-  } catch (e) {
-    // Ignore if extension context already invalidated at inject time
-  }
-
-  // ── 2. Relay intercepted messages from page → background ────────────────────
+try {
+  // Listen for intercepted messages from page context (interceptor.js in MAIN world)
   window.addEventListener('message', (event) => {
     if (!event.data?.__careeros) return;
 
-    // Guard: check chrome.runtime is still valid before calling
-    if (!chrome.runtime?.id) return;
-
     try {
-      chrome.runtime.sendMessage({
-        type: 'NETWORK_CAPTURED',
-        data: event.data.data
-      }).catch(() => {
-        // Swallow rejected promises (background worker inactive)
-      });
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.sendMessage({
+          type: 'NETWORK_CAPTURED',
+          data: event.data.data
+        }).catch(() => {
+          // Swallow rejected promises
+        });
+      }
     } catch (e) {
-      // Swallow synchronous "Extension context invalidated" errors
-      // This happens when the extension is reloaded while the page is open
+      // Swallow context invalidated errors
     }
   });
 
-  // ── 3. Listen for messages from background ───────────────────────────────────
-  try {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message.type === 'INJECT_WATCH') {
-        console.log('[CareerOS] Content script active, interceptor running.');
-      }
-    });
-  } catch (e) {
-    // Extension context invalidated
-  }
+  // Verify content script is active
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'INJECT_WATCH') {
+      console.log('[CareerOS Content] Active and listening for messages.');
+      sendResponse({ ok: true });
+    }
+  });
+
+  // Listen for custom trigger from the web dashboard page
+  document.addEventListener('CAREEROS_DISCOVER_API', (event) => {
+    const detail = event.detail;
+    if (detail && detail.careersUrl) {
+      console.log('[CareerOS Content] Received CAREEROS_DISCOVER_API trigger:', detail);
+      chrome.runtime.sendMessage({
+        type: 'START_DISCOVERY_FROM_PAGE',
+        data: detail
+      }).catch(() => {});
+    }
+  });
+} catch (e) {
+  // Context invalidated
 }

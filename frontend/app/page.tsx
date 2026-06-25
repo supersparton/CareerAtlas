@@ -46,6 +46,11 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState<boolean>(false);
   const [profile, setProfile] = useState<ParsedProfile | null>(null);
+  const [mounted, setMounted] = useState<boolean>(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   
   // Search state
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
@@ -184,6 +189,19 @@ export default function Home() {
     } catch (e: any) {
       addLog(`Error deleting watchlist: ${e.message}`);
     }
+  };
+
+  const triggerExtensionDiscovery = (item: any) => {
+    const event = new CustomEvent('CAREEROS_DISCOVER_API', {
+      detail: {
+        companyId: item.company_id,
+        companyIdentifier: item.company_identifier,
+        companyName: item.company_name,
+        careersUrl: item.careers_url
+      }
+    });
+    document.dispatchEvent(event);
+    addLog(`[Extension Bridge] Sent discovery trigger for ${item.company_name}. Opening tab...`);
   };
 
   const handleTriggerWatcherCheck = async () => {
@@ -515,6 +533,14 @@ export default function Home() {
       setWorkflowRunning(false);
     }
   };
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-emerald-500 selection:text-black">
@@ -1297,6 +1323,12 @@ export default function Home() {
                         </div>
                       </div>
                       <div className="flex flex-row md:flex-col justify-end gap-2 shrink-0 md:self-center">
+                        <button
+                          onClick={() => triggerExtensionDiscovery(item)}
+                          className="bg-emerald-950/20 hover:bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 hover:border-emerald-800 px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1"
+                        >
+                          🔌 Discover API
+                        </button>
                         <button
                           onClick={() => handleDeleteWatchlist(item.company_id)}
                           className="bg-red-950/20 hover:bg-red-900/30 text-red-400 border border-red-900/50 hover:border-red-800 px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
