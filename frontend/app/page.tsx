@@ -76,6 +76,16 @@ export default function Home() {
   const [results, setResults] = useState<JobResult[]>([]);
   const [loadingResults, setLoadingResults] = useState<boolean>(false);
 
+  // Dream Job Watcher States
+  const [watchedCompanies, setWatchedCompanies] = useState<any[]>([]);
+  const [discoveries, setDiscoveries] = useState<any[]>([]);
+  const [watchCompanyName, setWatchCompanyName] = useState<string>("");
+  const [watchCompanyUrl, setWatchCompanyUrl] = useState<string>("");
+  const [watchLocationFilter, setWatchLocationFilter] = useState<string>("");
+  const [watchRoleFilter, setWatchRoleFilter] = useState<string>("");
+  const [addingWatch, setAddingWatch] = useState<boolean>(false);
+  const [syncingWatches, setSyncingWatches] = useState<boolean>(false);
+
   // Pipeline Flow steps state
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
     { id: "step-1", name: "1. Profile Sync & User Embedding", description: "Saves structured profile and uploads experience/achievements to user_embeddings", status: "idle" },
@@ -89,10 +99,121 @@ export default function Home() {
 
   // Load existing profile on mount if available
   useEffect(() => {
-    fetchProfile().then(() => {
-      fetchResults();
+    fetchProfile().then((profileData) => {
+      fetchResults(profileData?.email);
+      fetchWatchers(profileData?.email);
+      fetchDiscoveries();
     });
   }, []);
+
+  const fetchWatchers = async (email?: string) => {
+    try {
+      const activeEmail = email || profile?.email;
+      const emailParam = activeEmail ? `?email=${encodeURIComponent(activeEmail)}` : "";
+      const res = await fetch(`/api/watcher/watchers${emailParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setWatchedCompanies(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Failed to fetch watched companies: ${e.message}`);
+    }
+  };
+
+  const fetchDiscoveries = async () => {
+    try {
+      const res = await fetch("/api/watcher/discoveries");
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveries(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Failed to fetch discovery queue: ${e.message}`);
+    }
+  };
+
+  const handleAddWatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!watchCompanyName.trim() || !watchCompanyUrl.trim()) return;
+
+    setAddingWatch(true);
+    addLog(`Submitting watch request for ${watchCompanyName}...`);
+
+    try {
+      const res = await fetch("/api/watcher/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: watchCompanyName.trim(),
+          url: watchCompanyUrl.trim(),
+          email: profile?.email || undefined,
+          locationFilter: watchLocationFilter.trim() || undefined,
+          roleFilter: watchRoleFilter.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) throw new Error(await res.text() || "Failed to add watchlist item.");
+
+      const data = await res.json();
+      addLog(data.message);
+
+      setWatchCompanyName("");
+      setWatchCompanyUrl("");
+      setWatchLocationFilter("");
+      setWatchRoleFilter("");
+
+      fetchWatchers(profile?.email);
+      fetchDiscoveries();
+    } catch (err: any) {
+      addLog(`Watch request error: ${err.message}`);
+      alert(err.message);
+    } finally {
+      setAddingWatch(false);
+    }
+  };
+
+  const handleApproveDiscovery = async (discoveryId: number, configStr: string) => {
+    addLog(`Submitting configuration approval for discovery ID ${discoveryId}...`);
+    try {
+      const parsedConfig = JSON.parse(configStr);
+      const res = await fetch("/api/watcher/admin/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          discoveryId,
+          customConfig: parsedConfig,
+        }),
+      });
+
+      if (res.ok) {
+        addLog("Approved discovered endpoint successfully!");
+        fetchWatchers(profile?.email);
+        fetchDiscoveries();
+      } else {
+        throw new Error(await res.text());
+      }
+    } catch (err: any) {
+      alert(`Approval error: ${err.message}. Ensure JSON is valid.`);
+    }
+  };
+
+  const handleSyncWatches = async () => {
+    setSyncingWatches(true);
+    addLog("Triggering manual sync for watched companies...");
+    try {
+      const res = await fetch("/api/watcher/sync", { method: "POST" });
+      if (res.ok) {
+        addLog("Sync command sent. Syncing in background.");
+        setTimeout(() => {
+          fetchResults(profile?.email);
+        }, 3000);
+      }
+    } catch (err: any) {
+      addLog(`Sync error: ${err.message}`);
+    } finally {
+      setSyncingWatches(false);
+    }
+  };
 
   const addLog = (message: string) => {
     setLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${message}`, ...prev]);
@@ -165,11 +286,13 @@ export default function Home() {
           addLog("Loaded existing profile from backend cache.");
           fetchSuggestions(data.email);
           fetchResults(data.email);
+          return data;
         }
       }
     } catch (e) {
       // Ignore initial load error if server is not up yet
     }
+    return null;
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -641,6 +764,183 @@ export default function Home() {
                   </>
                 )}
               </button>
+            </section>
+
+            {/* Step 4: Dream Job Watcher */}
+            <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/50 group-hover:bg-emerald-400 transition-colors" />
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-800 text-xs text-zinc-300">4</span>
+                  Dream Job Watcher
+                </h2>
+                <button
+                  onClick={handleSyncWatches}
+                  disabled={syncingWatches}
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <svg className={`w-3.5 h-3.5 ${syncingWatches ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18" />
+                  </svg>
+                  Sync Watches
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-400 mb-6">
+                Watch specific target companies. If standard ATS is detected, you will receive alerts instantly. If unknown, the Discovery agent will inspect network footprints for approval.
+              </p>
+
+              {/* Add Watch Form */}
+              <form onSubmit={handleAddWatch} className="flex flex-col gap-3 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    required
+                    value={watchCompanyName}
+                    onChange={(e) => setWatchCompanyName(e.target.value)}
+                    placeholder="Company Name (e.g. Cisco)"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                  />
+                  <input
+                    type="url"
+                    required
+                    value={watchCompanyUrl}
+                    onChange={(e) => setWatchCompanyUrl(e.target.value)}
+                    placeholder="Careers Page URL"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    value={watchLocationFilter}
+                    onChange={(e) => setWatchLocationFilter(e.target.value)}
+                    placeholder="Location Filter (e.g. Bengaluru, Remote - Optional)"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={watchRoleFilter}
+                      onChange={(e) => setWatchRoleFilter(e.target.value)}
+                      placeholder="Role/Title (e.g. Software Engineer - Optional)"
+                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                    />
+                    <button
+                      type="submit"
+                      disabled={addingWatch}
+                      className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 text-black font-semibold text-xs px-6 rounded-xl transition-all whitespace-nowrap"
+                    >
+                      {addingWatch ? "Adding..." : "Watch"}
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* Watched Companies list */}
+              <div className="mb-6">
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Currently Watching</h3>
+                {watchedCompanies.length === 0 ? (
+                  <div className="text-xs text-zinc-650 bg-zinc-950/40 p-4 border border-zinc-850 rounded-xl">
+                    No companies watched yet.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 max-h-[250px] overflow-y-auto pr-1">
+                    {watchedCompanies.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between bg-zinc-950/60 p-3 rounded-xl border border-zinc-900 text-xs">
+                        <div className="flex flex-col gap-1.5">
+                          <div>
+                            <span className="font-bold text-white">{c.name}</span>
+                            <span className="text-zinc-500 ml-2 text-[10px]">({c.domain})</span>
+                          </div>
+                          {(c.role_filter || c.location_filter) && (
+                            <div className="flex flex-wrap gap-1.5 text-[9px]">
+                              {c.role_filter && (
+                                <span className="bg-zinc-900 text-zinc-400 border border-zinc-800 px-2 py-0.5 rounded-md">
+                                  Role: <span className="text-emerald-400 font-semibold">{c.role_filter}</span>
+                                </span>
+                              )}
+                              {c.location_filter && (
+                                <span className="bg-zinc-900 text-zinc-400 border border-zinc-800 px-2 py-0.5 rounded-md">
+                                  Loc: <span className="text-emerald-400 font-semibold">{c.location_filter}</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 bg-emerald-950/40 text-emerald-400 border border-emerald-900/40 rounded-full text-[9px] uppercase font-mono">
+                            {c.provider_type}
+                          </span>
+                          <span className="px-2 py-0.5 bg-zinc-900 text-zinc-400 border border-zinc-800 rounded-full text-[9px] uppercase font-mono">
+                            {c.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Discoveries list (Human in the Loop) */}
+              <div>
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Discovery Agent Queue</h3>
+                {discoveries.length === 0 ? (
+                  <div className="text-xs text-zinc-650 italic">Discovery queue is empty.</div>
+                ) : (
+                  <div className="flex flex-col gap-3 max-h-[220px] overflow-y-auto pr-1">
+                    {discoveries.map((d) => {
+                      let statusClass = "text-zinc-500";
+                      if (d.status === "processing") statusClass = "text-yellow-400 animate-pulse";
+                      if (d.status === "completed") statusClass = "text-teal-400";
+                      if (d.status === "failed") statusClass = "text-red-400";
+                      if (d.status === "approved") statusClass = "text-emerald-400";
+
+                      return (
+                        <div key={d.id} className="bg-zinc-950/80 p-3.5 rounded-xl border border-zinc-900 text-[11px] flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-bold text-zinc-200">{d.company_name}</span>
+                              <span className="text-zinc-500 ml-2 text-[9px]">({d.domain})</span>
+                            </div>
+                            <span className={`font-mono text-[9px] uppercase ${statusClass}`}>
+                              {d.status}
+                            </span>
+                          </div>
+
+                          {d.error_message && (
+                            <div className="text-[10px] text-red-400 font-mono bg-red-950/15 p-2 rounded border border-red-900/30">
+                              Error: {d.error_message}
+                            </div>
+                          )}
+
+                          {d.status === "completed" && d.discovered_payload && (
+                            <div className="flex flex-col gap-2">
+                              <div className="text-[9px] text-teal-300 font-mono bg-teal-950/20 p-2.5 rounded border border-teal-900/40">
+                                <div className="font-bold mb-1">Discovered API:</div>
+                                <div className="break-all">{d.discovered_endpoint}</div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const configStr = JSON.stringify(d.discovered_payload, null, 2);
+                                  const userConfig = prompt("Review the discovered API configuration schema. Edit if necessary:", configStr);
+                                  if (userConfig) {
+                                    handleApproveDiscovery(d.id, userConfig);
+                                  }
+                                }}
+                                className="w-full bg-teal-500 hover:bg-teal-400 text-black py-1.5 rounded-lg text-[10px] font-bold transition-all"
+                              >
+                                Review & Approve Custom Provider
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </section>
 
           </div>
