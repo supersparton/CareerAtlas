@@ -4,7 +4,7 @@ import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { DiscoveryWorker } from './discovery.worker';
 import { ValidationWorker } from './validation.worker';
 import { ScrapingWorker } from './scraping.worker';
-import { IntelligenceWorker } from './intelligence.worker';
+import { IntelligenceWorker } from './job-intelligence.worker';
 import { EmbeddingWorker } from './embedding.worker';
 import { MatchingWorker } from './matching.worker';
 import { DiscoveryModule } from '../discovery/discovery.module';

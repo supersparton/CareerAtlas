@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ChatGroq } from '@langchain/groq';
-import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatOllama } from '@langchain/community/chat_models/ollama';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 

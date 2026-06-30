@@ -1,12 +1,25 @@
-  import { Injectable, Logger } from '@nestjs/common';
+  import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
   import { DatabaseService } from '../vector-store/database.service';
   import { MemoryService } from '../memory/memory.service';
   import { Job } from '../discovery/discovery.service';
   import { QdrantService } from '../vector-store/qdrant.service';
-  import { ROLE_ONTOLOGY, detectFamily, detectSubfamily } from 'src/matching/roleTaxonomy';
+  import {detectFamily, detectSubfamily } from '../matching/roleTaxonomy';
+  
   @Injectable()
-  export class ValidationService {
+  export class ValidationService implements OnModuleInit {
     private readonly logger = new Logger(ValidationService.name);
+    private readonly apiKey = process.env.TINYFISH_API_KEY;
+    private client: any = null;
+
+    async onModuleInit() {
+      try {
+        const { TinyFish } = await import('@tiny-fish/sdk');
+        this.client = new TinyFish({ apiKey: this.apiKey });
+        this.logger.log('[VALIDATION] TinyFish SDK client loaded dynamically.');
+      } catch (err: any) {
+        this.logger.error(`[VALIDATION] Failed to dynamically load TinyFish SDK: ${err.message}`);
+      }
+    }
 
     constructor(
       private readonly db: DatabaseService,
@@ -52,7 +65,7 @@
         }
 
         // 2. Check Expiry
-        const isExpired = this.isExpired(job);
+        const isExpired = await this.isExpired(job);
         if (isExpired) {
           return { valid: false, reason: 'Expired' };
         }
@@ -180,12 +193,54 @@
     }
 
 
-    private isExpired(job: Job): boolean {
+    private async isExpired(job: Job): Promise<boolean> {
       // JDs with clear "expired/closed" language in body
       const expiredKeywords = /\b(hiring has ended|no longer accepting applications|this job has expired|role is closed)\b/i;
-      if (expiredKeywords.test(job.description)) {
+      if (job.description && expiredKeywords.test(job.description)) {
         return true;
       }
+
+      if (!this.client) {
+        this.logger.warn(`[VALIDATION] TinyFish client not initialized. Skipping deep content check for: ${job.applyUrl}`);
+        return false;
+      }
+
+      try {
+        const content = await this.client.fetch.getContents({ urls: [job.applyUrl] });
+
+        // Check for 404 / HTTP error results
+        if (content.errors && content.errors.length > 0) {
+          const has404 = content.errors.some(err => 
+            err.error.includes('404') || 
+            err.error.toLowerCase().includes('not found')
+          );
+          if (has404) {
+            this.logger.log(`[VALIDATION] Expiry check: 404 returned for ${job.applyUrl}`);
+            return true;
+          }
+        }
+
+        // Check for empty results / missing content
+        if (!content.results || content.results.length === 0) {
+          this.logger.log(`[VALIDATION] Expiry check: No content returned for ${job.applyUrl}`);
+          return true;
+        }
+
+        const result = content.results[0];
+        if (!result || typeof result.text !== 'string' || result.text.trim().length === 0) {
+          this.logger.log(`[VALIDATION] Expiry check: Text content is empty or invalid for ${job.applyUrl}`);
+          return true;
+        }
+
+        // Check fetched full text for expiry keywords
+        if (expiredKeywords.test(result.text)) {
+          this.logger.log(`[VALIDATION] Expiry check: Expired keywords found in fetched text for ${job.applyUrl}`);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.error(`[VALIDATION] Expiry check failed for ${job.applyUrl}: ${err.message}`);
+      }
+
       return false;
     }
 
@@ -201,7 +256,14 @@
         urlLower.includes('wellfound.com') ||
         urlLower.includes('ycombinator.com') ||
         urlLower.includes('glassdoor') ||
-        urlLower.includes('indeed.com')
+        urlLower.includes('indeed.com') ||
+        urlLower.includes('lever.co') ||
+        urlLower.includes('greenhouse.io') ||
+        urlLower.includes('ashbyhq.com') ||
+        urlLower.includes('instahyre.com/job') ||
+        urlLower.includes('cutshort.io/job') ||
+        urlLower.includes('naukri.com/job-listings') ||
+        urlLower.includes('workable.com')
       ) {
         return true;
       }

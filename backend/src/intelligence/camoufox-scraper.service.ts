@@ -1,25 +1,47 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Camoufox } from 'camoufox';
 
 @Injectable()
-export class CamoufoxScraperService {
+export class CamoufoxScraperService implements OnModuleDestroy {
   private readonly logger = new Logger(CamoufoxScraperService.name);
+  private browser: any = null;
 
-  async scrapeUrl(url: string): Promise<string | null> {
-    this.logger.log(`[CAMOUFOX] Launching anti-detect browser to scrape URL: ${url}`);
-    let browser: any = null;
-    try {
-      browser = await Camoufox({
+  async onModuleDestroy() {
+    if (this.browser) {
+      this.logger.log('[CAMOUFOX] Closing shared browser session...');
+      try {
+        await this.browser.close();
+      } catch (err: any) {
+        this.logger.error(`[CAMOUFOX] Error closing browser: ${err.message}`);
+      }
+      this.browser = null;
+    }
+  }
+
+  private async getBrowser(): Promise<any> {
+    if (!this.browser || typeof this.browser.isConnected !== 'function' || !this.browser.isConnected()) {
+      this.logger.log('[CAMOUFOX] Launching shared anti-detect browser instance...');
+      this.browser = await Camoufox({
         headless: true,
       });
+    }
+    return this.browser;
+  }
 
-      const page = await browser.newPage();
+  async scrapeUrl(url: string): Promise<string | null> {
+    this.logger.log(`[CAMOUFOX] Scraping URL using shared browser: ${url}`);
+    let context: any = null;
+    let page: any = null;
+    try {
+      const browserInstance = await this.getBrowser();
+      context = await browserInstance.newContext();
+      page = await context.newPage();
       
-      // Navigate with a 20-second timeout
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      // Navigate with a 10-second timeout
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
       // Wait a moment for dynamic SPAs to hydrate
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1750);
 
       // Check for authwall redirects or login checks
       const finalUrl = page.url().toLowerCase();
@@ -100,11 +122,18 @@ export class CamoufoxScraperService {
       this.logger.error(`[CAMOUFOX] Failed to scrape URL ${url}: ${err.message}`);
       return null;
     } finally {
-      if (browser) {
+      if (page) {
         try {
-          await browser.close();
-        } catch (closeErr) {
-          this.logger.error(`[CAMOUFOX] Error closing browser: ${closeErr.message}`);
+          await page.close();
+        } catch (pageCloseErr: any) {
+          this.logger.warn(`[CAMOUFOX] Error closing page: ${pageCloseErr.message}`);
+        }
+      }
+      if (context) {
+        try {
+          await context.close();
+        } catch (contextCloseErr: any) {
+          this.logger.warn(`[CAMOUFOX] Error closing context: ${contextCloseErr.message}`);
         }
       }
     }

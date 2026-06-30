@@ -31,7 +31,7 @@ export class AtsPortalsAgent {
     }
 
     const jobs: Job[] = [];
-    try {
+    try { 
       const dateFilter = this.getDateFilter();
       const expandedLoc = this.expandLocationForQuery(locationPref);
       const query = `(site:boards.greenhouse.io OR site:lever.co OR site:ashbyhq.com OR site:workable.com) "${searchTerm}" ${expandedLoc} ${dateFilter}`;
@@ -59,10 +59,17 @@ export class AtsPortalsAgent {
           const url = result.url || '';
           const snippet = result.snippet || '';
 
-          let title = 'Backend Engineer';
-          let company = 'Company';
+          let title, company;
 
-          if (fullTitleText.toLowerCase().includes('hiring')) {
+          if (url.toLowerCase().includes('lever.co')) {
+            const parts = fullTitleText.split(/ - | \| /);
+            if (parts.length >= 2) {
+              company = parts[0]?.trim() ;
+              title = parts[1]?.trim();
+            } else {
+              title = fullTitleText.trim();
+            }
+          } else if (fullTitleText.toLowerCase().includes('hiring')) {
             const parts = fullTitleText.split(/ hiring /i);
             company = parts[0]?.trim() || 'Company';
             title = parts[1]?.split(/ - | \| /)[0]?.trim() || 'Backend Engineer';

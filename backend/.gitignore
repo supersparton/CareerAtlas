@@ -15,6 +15,10 @@ lerna-debug.log*
 # OS
 .DS_Store
 
+# Local cache
+*vocab.txt
+model_optimized.onnx
+
 # Tests
 /coverage
 /.nyc_output
