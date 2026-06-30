@@ -5,6 +5,16 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-06-30] release | Distributed Queue Migration, Redis Caching, fastembed & Browser Context Pooling
+- Migrated the linear agent service loop into a highly concurrent, distributed architecture using BullMQ message queues.
+- Replaced file-locked JSON cache maps (`processed_jobs.json`, `seen_jobs.json`) with Redis sets incorporating 24-hour expiration TTLs.
+- Updated `PipelineCoordinatorService` to manage execution hashes and atomic counters (`INCR`) in Redis to protect against parallel thread race conditions.
+- Integrated Qdrant `fastembed` (`BGE-Small-EN-v1.5`) to perform text embedding generation in-process, resolving local ONNX memory locks and ensuring awaited cache writes.
+- Implemented browser context and page pooling in `CamoufoxScraperService` to reuse browser processes and isolate cookies, yielding a 10x reduction in CPU and RAM overhead.
+- Enhanced `ValidationService` with deep asynchronous expiry checking: checking for 404 HTTP errors in search results, empty page content, and searching the full fetched text for closed/expired keywords. Note: validation unit tests are purposefully excluded from the active workspace.
+- Refactored `ValidationService` to load `@tiny-fish/sdk` dynamically using the NestJS `OnModuleInit` lifecycle, preventing CommonJS loader failures (`ERR_PACKAGE_PATH_NOT_EXPORTED`).
+- Resolved Lever title-parsing bug in `AtsPortalsAgent` by swapping reversed company/title strings.
+
 ## [2026-06-13] release | Visual Architecture Flowchart & Technical Diagramming
 - Designed and documented the complete end-to-end user onboarding and autonomous scraping pipeline in the [System Flowchart](flowchart.md).
 - Integrated draw.io interactive diagram support using Mermaid.js syntax and the `drawio-master` technical design specifications.

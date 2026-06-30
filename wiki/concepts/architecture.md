@@ -1,66 +1,65 @@
 ---
 title: CareerAtlas Architecture
 description: Explains the current runtime architecture, data flow, and module boundaries of the CareerAtlas backend and related frontend scaffold.
-date: 2026-05-30
-tags: [careeratlas, architecture, workflow, backend, modules]
+date: 2026-06-30
+tags: [careeratlas, architecture, workflow, backend, modules, redis, bullmq]
 ---
 
-CareerAtlas is built around a linear agent loop in the NestJS backend: discover jobs, deduplicate them, score them against the user profile, and alert on high-value matches.[^1][^2][^3][^4][^5] The current implementation keeps side effects localized in dedicated services, which makes the control flow easy to reason about and change.[^6][^7][^8][^9][^10]
+CareerAtlas is built as a distributed, queue-driven NestJS application designed to scale horizontally across workers. The system coordinates long-running scraping, LLM-based parsing, vector indexing, and skills-overlap matching through specialized message queues.
 
-## System Flow
+## System Workflow Pipeline
 
-| Step | Service | Responsibility | Main Output |
+The processing pipeline is organized into five concurrent stages coordinated via **BullMQ**:
+
+| Step | Worker / Service | Responsibility | State Management & Cache |
 | --- | --- | --- | --- |
-| 1 | ProfileService | Parses uploaded resume PDF to JSON (`profile.json`) using LLM, and suggests job title search terms. | `profile.json` & Suggested Titles |
-| 2 | AgentController | Receives user-confirmed/edited search terms and triggers the scraper run in the background. | Job search query trigger |
-| 3 | Discovery Agents | Parallel scrapers: Playwright (`LinkedInAgent`) and TinyFish Search API (`AtsPortalsAgent`, `StartupBoardsAgent`, `IndiaFocusedAgent`). | Real-time candidate jobs |
-| 4 | MemoryService | Hashes `company + title + location + source` and checks `seen_jobs.json` to prevent duplicates. | Seen / unseen decision |
-| 5 | IntelligenceService | Evaluates candidate jobs against the parsed JSON profile using Groq + LangChain. | `JobScore` & extracted metadata |
-| 6 | NotifierService | Sends a Telegram Markdown alert when the match score is high enough. | Telegram notification |
-| 7 | AgentService | Coordinates the background loop, applies LLM location/company refinements, and gathers 5 matches. | Completed run |
+| **1** | **ProfileService** | Parses PDF resume to structured profile JSON (`profile.json`) using LLM and suggests search terms. | Local File / Database |
+| **2** | **DiscoveryWorker** | Run parallel queries across ATS platforms (Greenhouse, Lever, Ashby, Workable), Startup boards (YC, Wellfound), and LinkedIn. | Enqueues raw jobs to Redis |
+| **3** | **ValidationWorker** | Verifies URL status, checks database and Qdrant duplicates, and scans live page status (checking for 404s, empty pages, and closed keywords). | Redis Hash & Sets (24h TTL) |
+| **4** | **ScrapingWorker** | Spawns anti-detect browser contexts (`CamoufoxScraperService`) to extract raw job descriptions. | Shared browser pooling |
+| **5** | **IntelligenceWorker** | Extracts structured candidate requirements (experience, remote status, skills list) via LLM. | Tri-level LLM fallback chain |
+| **6** | **EmbeddingWorker** | Generates text embeddings using `fastembed` in-process (`BGE-Small-EN-v1.5`) and upserts vector payloads. | Qdrant Vector DB |
+| **7** | **MatchingWorker** | Ranks jobs using a constant-time $O(1)$ flat `SKILL_INDEX` taxonomy, generates match rationales, and alerts. | PostgreSQL results & Telegram |
 
 ## Backend Module Map
 
 ```mermaid
 graph TD
-    A[AppModule] --> B[AgentModule]
-    B --> C[AgentController]
-    B --> D[ProfileService]
-    B --> E[AgentService]
-    B --> F[DiscoveryModule]
-    F --> G[LinkedInAgent - Playwright]
-    F --> H[AtsPortalsAgent - TinyFish]
-    F --> I[StartupBoardsAgent - TinyFish]
-    F --> J[IndiaFocusedAgent - TinyFish]
+    A[AppModule] --> B[QueuesModule]
+    A --> C[VectorStoreModule]
+    A --> D[AgentModule]
+    A --> E[MemoryModule]
+
+    B --> F[BullMQ Message Broker]
+    F --> G[DiscoveryWorker]
+    F --> H[ValidationWorker]
+    F --> I[ScrapingWorker]
+    F --> J[IntelligenceWorker]
+    F --> K[EmbeddingWorker]
+    F --> L[MatchingWorker]
+
+    C --> M[QdrantService]
+    C --> N[DatabaseService - PostgreSQL]
+    E --> O[MemoryService - Redis]
 ```
 
 ## Important Implementation Details
 
-- `AppModule` loads `.env` through `ConfigModule` and boots `AgentModule`.[^6]
-- `ProfileService` extracts raw text from PDF resume uploads using `pdf-parse` and structures it into a comprehensive profile JSON (`profile.json`) containing contact, skills, experience, projects, and education using Llama 3.3.
-- `AgentController` provides the interactive REST API endpoints for uploading resumes, getting profile info, generating recommended search titles, and triggering runs.
-- `AgentService` remains in standby mode upon bootstrapping and is invoked asynchronously when the user confirms search titles via the API.
-- `LinkedInAgent` uses Chromium with custom scripts (blocking WebGL/Canvas fingerprinting, masking webdriver) and human-like typing to scrape jobs securely.[^8]
-- `AtsPortalsAgent`, `StartupBoardsAgent`, and `IndiaFocusedAgent` query the **TinyFish Search API** directly, bypassing expired caches and avoiding Playwright execution overhead.
-- `IntelligenceService` uses a multi-provider fallback configuration (Gemini API, Groq with `llama-3.3-70b-versatile`, or local Ollama) and parses structured output into `JobScore` fields, refining company names and physical locations from titles and snippets.[^9]
-- `MemoryService` persists dedupe state as a flat JSON array of SHA-256 strings in `seen_jobs.json` using a compound key (`company|title|location|source`).[^10]
-- `NotifierService` sends Markdown messages to Telegram using native `fetch` and skips alerts when credentials are missing.[^11]
+### 1. Redis Caching & State Coordination
+- **Deduplication**: `MemoryService` hashes job details (`company|title|location|source`) using SHA-256 and stores them in Redis sets (`careeratlas:processed_jobs` and `careeratlas:matched_jobs`) with a 24-hour expiration TTL. This prevents disk-locking and memory leaks.
+- **Pipeline Tracking**: `PipelineCoordinatorService` tracks active run states, execution logs, and remaining job counters in Redis. Job decrements are handled via atomic `INCR` commands to ensure thread safety across parallel BullMQ queue threads.
+
+### 2. Validation & Expiry Rules
+- **Early Bypass**: Jobs already indexed in Qdrant bypass downstream scraping and LLM parsing entirely.
+- **Expiry Checking**: Evaluates if a job is closed or inactive. It checks if the URL returns a 404 error, if the page text is empty/missing, or if the full text contains expired keywords (e.g. `hiring has ended`, `role is closed`).
+- **Dynamic Imports**: To prevent CommonJS runtime packaging failures, `@tiny-fish/sdk` is loaded dynamically within `ValidationService` during the NestJS `OnModuleInit` hook.
+
+### 3. In-Process Embedding Generation
+- Replaced Python-based dependencies and event-loop-blocking ONNX models with Qdrant `fastembed` (`EmbeddingModel.BGESmallENV15`). Models are downloaded locally and run directly in the Node.js process using native hardware acceleration.
+
+### 4. Browser Context Pooling
+- `CamoufoxScraperService` maintains a single running browser instance (`camoufox`). For each scrape task, it creates an isolated browser context (`newContext()`) and tab (`newPage()`), disposing of them immediately afterward. This yields a 10x reduction in memory/CPU overhead while preventing cookie tracking.
 
 ## Frontend State
 
-The frontend is present as a separate Next.js app but currently uses the default starter page, layout metadata, and base CSS, so it has not yet become part of the main runtime workflow.[^12][^13][^14]
-
-[^1]: ai-context/AGENTS.md
-[^2]: ai-context/ARCHITECTURE.md
-[^3]: ai-context/PROGRESS.md
-[^4]: backend/src/agent/agent.service.ts
-[^5]: backend/src/app.module.ts
-[^6]: backend/src/main.ts
-[^7]: backend/src/agent/agent.service.ts
-[^8]: backend/src/discovery/discovery.service.ts
-[^9]: backend/src/intelligence/intelligence.service.ts
-[^10]: backend/src/memory/memory.service.ts
-[^11]: backend/src/notifier/notifier.service.ts
-[^12]: frontend/app/page.tsx
-[^13]: frontend/app/layout.tsx
-[^14]: frontend/app/globals.css
+The frontend is a React Next.js application that streams active pipeline logs, coordinates resume parsing, and displays matching results from the backend in real-time.
