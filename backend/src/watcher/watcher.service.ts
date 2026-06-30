@@ -51,6 +51,45 @@ export class WatcherService {
     );
     const userId = userRes.rows[0].id;
 
+    // A. Check if the company already exists in watched_companies (by name, or by URL domain)
+    let domainStr = '';
+    try {
+      domainStr = new URL(url).hostname.replace('www.', '').toLowerCase();
+    } catch {
+      domainStr = companyName.toLowerCase() + '.com';
+    }
+
+    const existingRes = await this.db.query(
+      `SELECT * FROM watched_companies WHERE LOWER(name) = $1 OR LOWER(domain) = $2 OR LOWER(domain) = $3`,
+      [companyName.toLowerCase(), domainStr, `www.${domainStr}`]
+    );
+
+    if (existingRes.rows.length > 0) {
+      const company = existingRes.rows[0];
+      const companyId = company.id;
+      this.logger.log(`Company "${companyName}" already exists in watched_companies (id: ${companyId}, provider: ${company.provider_type}). Reusing config.`);
+
+      // Link user to company with filters
+      await this.db.query(
+        `INSERT INTO job_watchers (user_id, company_id, location_filter, role_filter)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, company_id) 
+         DO UPDATE SET location_filter = EXCLUDED.location_filter, role_filter = EXCLUDED.role_filter`,
+        [userId, companyId, locationFilter || null, roleFilter || null]
+      );
+
+      // Trigger immediate background sync of jobs for this company
+      this.syncJobsForCompany(companyId).catch((err) =>
+        this.logger.error(`Error in immediate job sync for company ${companyId}: ${err.message}`)
+      );
+
+      return {
+        status: 'resolved',
+        message: `Successfully watching ${companyName} (reused existing configuration).`,
+        companyId,
+      };
+    }
+
     // Resolve company career page
     const resolution = await this.resolver.resolveCompany(companyName, url);
 
@@ -127,38 +166,6 @@ export class WatcherService {
 
     this.logger.log(`Syncing jobs for company: ${company.name}`);
 
-    let rawJobs: RawJob[] = [];
-
-    // Select the correct provider
-    switch (company.provider_type.toLowerCase()) {
-      case 'greenhouse':
-        rawJobs = await this.greenhouse.fetchJobs(company.provider_slug);
-        break;
-      case 'lever':
-        rawJobs = await this.lever.fetchJobs(company.provider_slug);
-        break;
-      case 'ashby':
-        rawJobs = await this.ashby.fetchJobs(company.provider_slug);
-        break;
-      case 'workday':
-        rawJobs = await this.workday.fetchJobs(company.provider_slug);
-        break;
-      case 'icims':
-        rawJobs = await this.icims.fetchJobs(company.provider_slug);
-        break;
-      case 'custom':
-        rawJobs = await this.customConfig.fetchJobsWithConfig(company.name, company.config);
-        break;
-      default:
-        this.logger.error(`Unsupported provider type: ${company.provider_type}`);
-        return;
-    }
-
-    if (rawJobs.length === 0) {
-      this.logger.log(`No active jobs fetched for ${company.name}`);
-      return;
-    }
-
     // Retrieve all active watchers and their filters for this company
     const watchersRes = await this.db.query(
       `SELECT DISTINCT user_id, location_filter, role_filter FROM job_watchers WHERE company_id = $1`,
@@ -166,27 +173,101 @@ export class WatcherService {
     );
     const watchers = watchersRes.rows;
 
-    // Insert new jobs and check if they are newly discovered
-    let newJobsCount = 0;
-    for (const job of rawJobs) {
-      // Deduplicate using a unique hash of (company_id, external_id)
-      const jobHash = `${companyId}|${job.externalId}`;
-      
-      const checkRes = await this.db.query(
-        `SELECT id FROM results WHERE job_id = $1 AND company = $2`,
-        [jobHash, company.name]
-      );
+    if (watchers.length === 0) {
+      this.logger.log(`No active watchers for ${company.name}. Skipping sync.`);
+      return;
+    }
 
-      // Find all watchers who match the filter criteria for this job
-      const matchingWatchers = watchers.filter(watcher => 
-        this.matchesFilters(job, watcher.location_filter, watcher.role_filter)
-      );
+    const jobsToProcess: { job: RawJob; matchingWatchers: any[] }[] = [];
 
-      if (matchingWatchers.length === 0) {
-        continue;
+    const hasPlaceholders = (cfg: any): boolean => {
+      const str = JSON.stringify(cfg);
+      return str.includes('{{role}}') || str.includes('{{location}}');
+    };
+
+    if (company.provider_type.toLowerCase() === 'custom' && hasPlaceholders(company.config)) {
+      // Group watchers by distinct role & location filter combinations
+      const groups = new Map<string, { role: string; location: string; watchers: any[] }>();
+      for (const watcher of watchers) {
+        const role = watcher.role_filter || '';
+        const location = watcher.location_filter || '';
+        const key = `${role.toLowerCase()}|${location.toLowerCase()}`;
+        if (!groups.has(key)) {
+          groups.set(key, { role, location, watchers: [] });
+        }
+        groups.get(key)!.watchers.push(watcher);
       }
 
+      this.logger.log(`Syncing custom provider with templates for ${company.name} in ${groups.size} filter groups.`);
+
+      for (const [key, group] of groups.entries()) {
+        try {
+          let configStr = JSON.stringify(company.config);
+          configStr = configStr
+            .replace(/\{\{role\}\}/g, group.role)
+            .replace(/\{\{location\}\}/g, group.location);
+          const interpolatedConfig = JSON.parse(configStr);
+
+          const groupJobs = await this.customConfig.fetchJobsWithConfig(company.name, interpolatedConfig);
+          this.logger.log(`Fetched ${groupJobs.length} jobs for group "${key}"`);
+
+          for (const job of groupJobs) {
+            // Guarantee matching using local filters
+            const matchingWatchers = group.watchers.filter(watcher =>
+              this.matchesFilters(job, watcher.location_filter, watcher.role_filter)
+            );
+            if (matchingWatchers.length > 0) {
+              jobsToProcess.push({ job, matchingWatchers });
+            }
+          }
+        } catch (err) {
+          this.logger.error(`Failed custom sync for group "${key}": ${err.message}`);
+        }
+      }
+    } else {
+      // Standard flow (fetch all once and filter locally)
+      let rawJobs: RawJob[] = [];
+      switch (company.provider_type.toLowerCase()) {
+        case 'greenhouse':
+          rawJobs = await this.greenhouse.fetchJobs(company.provider_slug);
+          break;
+        case 'lever':
+          rawJobs = await this.lever.fetchJobs(company.provider_slug);
+          break;
+        case 'ashby':
+          rawJobs = await this.ashby.fetchJobs(company.provider_slug);
+          break;
+        case 'workday':
+          rawJobs = await this.workday.fetchJobs(company.provider_slug);
+          break;
+        case 'icims':
+          rawJobs = await this.icims.fetchJobs(company.provider_slug);
+          break;
+        case 'custom':
+          rawJobs = await this.customConfig.fetchJobsWithConfig(company.name, company.config);
+          break;
+        default:
+          this.logger.error(`Unsupported provider type: ${company.provider_type}`);
+          return;
+      }
+
+      for (const job of rawJobs) {
+        const matchingWatchers = watchers.filter(watcher =>
+          this.matchesFilters(job, watcher.location_filter, watcher.role_filter)
+        );
+        if (matchingWatchers.length > 0) {
+          jobsToProcess.push({ job, matchingWatchers });
+        }
+      }
+    }
+
+    // Insert new jobs and check if they are newly discovered
+    let newJobsCount = 0;
+    for (const { job, matchingWatchers } of jobsToProcess) {
+      // Deduplicate using a unique hash of (company_id, external_id)
+      const jobHash = `${companyId}|${job.externalId}`;
       let savedForAny = false;
+
       for (const watcher of matchingWatchers) {
         const insertRes = await this.db.query(
           `INSERT INTO results (user_id, job_id, company, title, location, source, url, score, reasoning, status)

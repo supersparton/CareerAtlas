@@ -120,40 +120,26 @@ export class CompanyResolverService {
 
       const html = await response.text();
 
-      // Search HTML for common ATS domains/endpoints
-      // 1. Greenhouse (regex: greenhouse.io/embed or boards.greenhouse.io/<slug>)
-      const greenhouseRegex = /boards(-api)?\.greenhouse\.io\/(embed\/)?v1\/boards\/([a-zA-Z0-9_-]+)/i;
-      const ghMatch = html.match(greenhouseRegex);
-      if (ghMatch && ghMatch[3]) {
-        return { providerType: 'greenhouse', providerSlug: ghMatch[3] };
+      // Extract all URLs from href and src attributes to look for true integrations/links
+      const urls: string[] = [];
+      const urlRegex = /(?:href|src)=["'](https?:\/\/[^"']+)["']/gi;
+      let match;
+      while ((match = urlRegex.exec(html)) !== null) {
+        urls.push(match[1]);
       }
 
-      // Alternate Greenhouse link regex
-      const greenhouseLinkRegex = /boards\.greenhouse\.io\/([a-zA-Z0-9_-]+)/i;
-      const ghLinkMatch = html.match(greenhouseLinkRegex);
-      if (ghLinkMatch && ghLinkMatch[1] && ghLinkMatch[1] !== 'embed') {
-        return { providerType: 'greenhouse', providerSlug: ghLinkMatch[1] };
-      }
-
-      // 2. Lever (regex: jobs.lever.co/<slug>)
-      const leverRegex = /jobs\.lever\.co\/([a-zA-Z0-9_-]+)/i;
-      const leverMatch = html.match(leverRegex);
-      if (leverMatch && leverMatch[1]) {
-        return { providerType: 'lever', providerSlug: leverMatch[1] };
-      }
-
-      // 3. Ashby (regex: jobs.ashbyhq.com/<slug>)
-      const ashbyRegex = /jobs\.ashbyhq\.com\/([a-zA-Z0-9_-]+)/i;
-      const ashbyMatch = html.match(ashbyRegex);
-      if (ashbyMatch && ashbyMatch[1]) {
-        return { providerType: 'ashby', providerSlug: ashbyMatch[1] };
-      }
-
-      // 4. Workday (regex: <slug>.myworkdayjobs.com)
-      const workdayRegex = /([a-zA-Z0-9_-]+)\.myworkdayjobs\.com/i;
-      const workdayMatch = html.match(workdayRegex);
-      if (workdayMatch && workdayMatch[1]) {
-        return { providerType: 'workday', providerSlug: workdayMatch[1] };
+      for (const urlStr of urls) {
+        try {
+          const parsed = new URL(urlStr);
+          const atsMatch = this.detectAtsFromUrl(parsed);
+          if (atsMatch && atsMatch.providerSlug) {
+            const slugLower = atsMatch.providerSlug.toLowerCase();
+            // Ignore generic keywords that might appear as slugs in script sources
+            if (!['embed', 'js', 'api', 'v1', 'assets', 'static'].includes(slugLower)) {
+              return atsMatch;
+            }
+          }
+        } catch {}
       }
 
       return null;
