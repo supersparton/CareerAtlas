@@ -61,4 +61,52 @@ export class NotifierService {
       this.logger.error(`[NOTIFIER] Failed to send Telegram alert: ${e.message}`);
     }
   }
+
+  async sendWatcherAlert(
+    company: string,
+    watchRole: string,
+    watchLocation: string,
+    jobTitle: string,
+    jobUrl: string,
+    searchPageUrl?: string
+  ) {
+    if (!this.botToken || !this.chatId) {
+      this.logger.warn('[NOTIFIER] Telegram credentials not found in .env. Skipping watcher alert.');
+      return;
+    }
+
+    let message = `🔔 <b>New Matching Career Page Job!</b> 🔔\n\n` +
+      `🏢 <b>Company:</b> ${escapeHtml(company)}\n` +
+      `🎯 <b>Watch Query:</b> ${escapeHtml(watchRole)} (${escapeHtml(watchLocation)})\n` +
+      `💼 <b>Found Role:</b> ${escapeHtml(jobTitle)}\n\n` +
+      `🔗 <a href="${jobUrl}">View and Apply Here</a>`;
+
+    if (searchPageUrl) {
+      message += `\n🔍 <a href="${searchPageUrl}">Search Results Page (Official)</a>`;
+    }
+
+    const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chat_id: this.chatId,
+          text: message,
+          parse_mode: 'HTML',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Telegram API responded with status ${response.status}`);
+      }
+
+      this.logger.log(`[NOTIFIER] Telegram watcher alert sent successfully for ${company}!`);
+    } catch (e) {
+      this.logger.error(`[NOTIFIER] Failed to send Telegram watcher alert: ${e.message}`);
+    }
+  }
 }

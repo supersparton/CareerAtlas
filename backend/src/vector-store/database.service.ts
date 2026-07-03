@@ -150,6 +150,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         CREATE INDEX IF NOT EXISTS idx_user_skills_user ON user_skills(user_id);
       `);
 
+      // 7. Create company_careers table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS company_careers (
+          id SERIAL PRIMARY KEY,
+          company_name VARCHAR(255) UNIQUE NOT NULL,
+          career_url TEXT NOT NULL,
+          last_verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 8. Create user_career_watches table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_career_watches (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          company_name VARCHAR(255) NOT NULL,
+          role VARCHAR(255) NOT NULL,
+          location VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (user_id, company_name, role, location)
+        );
+      `);
+
+      // 9. Create user_watch_notifications table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_watch_notifications (
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          job_id VARCHAR(255) NOT NULL,
+          notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, job_id)
+        );
+      `);
+
       await client.query('COMMIT');
       this.logger.log('[DATABASE] Database schema and indexes initialized successfully.');
     } catch (err) {

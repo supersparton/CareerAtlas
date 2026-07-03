@@ -75,6 +75,14 @@ export default function Home() {
   const [results, setResults] = useState<JobResult[]>([]);
   const [loadingResults, setLoadingResults] = useState<boolean>(false);
 
+  // Company Career Watcher state
+  const [watches, setWatches] = useState<any[]>([]);
+  const [loadingWatches, setLoadingWatches] = useState<boolean>(false);
+  const [companyWatchInput, setCompanyWatchInput] = useState<string>("");
+  const [roleWatchInput, setRoleWatchInput] = useState<string>("");
+  const [locationWatchInput, setLocationWatchInput] = useState<string>("");
+  const [addingWatch, setAddingWatch] = useState<boolean>(false);
+
   // Pipeline Flow steps state
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
     { id: "step-1", name: "1. Profile Sync & User Embedding", description: "Saves structured profile and uploads experience/achievements to user_embeddings", status: "idle" },
@@ -90,8 +98,100 @@ export default function Home() {
   useEffect(() => {
     fetchProfile().then(() => {
       fetchResults();
+      fetchWatches();
     });
   }, []);
+
+  const fetchWatches = async () => {
+    setLoadingWatches(true);
+    try {
+      const res = await fetch("/api/company-watcher/watches");
+      if (res.ok) {
+        const data = await res.json();
+        setWatches(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Error loading company career watches: ${e.message}`);
+    } finally {
+      setLoadingWatches(false);
+    }
+  };
+
+  const handleAddWatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!companyWatchInput.trim() || !roleWatchInput.trim() || !locationWatchInput.trim()) {
+      alert("Please enter company, role, and location.");
+      return;
+    }
+    setAddingWatch(true);
+    addLog(`Adding career watcher for ${roleWatchInput.trim()} at ${companyWatchInput.trim()} (${locationWatchInput.trim()})...`);
+    try {
+      const res = await fetch("/api/company-watcher/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: companyWatchInput.trim(),
+          role: roleWatchInput.trim(),
+          location: locationWatchInput.trim(),
+        }),
+      });
+
+      if (res.ok) {
+        const newWatch = await res.json();
+        if (newWatch.isAlreadyInserted) {
+          addLog(`Watch already existed! Instantly enqueued new check and scanned for existing matches.`);
+          alert("This watch was already configured. Instantly triggered a new scan and checked for existing matches!");
+        } else {
+          addLog(`Watch added successfully. Discovered Career URL: ${newWatch.careerUrl || 'N/A'}`);
+        }
+        setCompanyWatchInput("");
+        setRoleWatchInput("");
+        setLocationWatchInput("");
+        fetchWatches();
+      } else {
+        const errText = await res.text();
+        throw new Error(errText);
+      }
+    } catch (e: any) {
+      addLog(`Error adding watch: ${e.message}`);
+    } finally {
+      setAddingWatch(false);
+    }
+  };
+
+  const handleDeleteWatch = async (id: number) => {
+    addLog(`Removing career watcher with ID: ${id}...`);
+    try {
+      const res = await fetch(`/api/company-watcher/watch/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        addLog(`Watcher removed successfully.`);
+        fetchWatches();
+      } else {
+        const errText = await res.text();
+        throw new Error(errText);
+      }
+    } catch (e: any) {
+      addLog(`Error removing watch: ${e.message}`);
+    }
+  };
+
+  const handleTriggerWatcherCron = async () => {
+    addLog("Manually triggering all company career page scraper runs...");
+    try {
+      const res = await fetch("/api/company-watcher/trigger", {
+        method: "POST",
+      });
+      if (res.ok) {
+        addLog("Scraping cron run initiated successfully.");
+      } else {
+        throw new Error(await res.text());
+      }
+    } catch (e: any) {
+      addLog(`Error triggering watcher runs: ${e.message}`);
+    }
+  };
 
   const addLog = (message: string) => {
     setLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${message}`, ...prev]);
@@ -614,6 +714,145 @@ export default function Home() {
                   </>
                 )}
               </button>
+            </section>
+
+            {/* Step 4: Company Career Page Watcher */}
+            <section className="bg-zinc-900/40 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-1 h-full bg-teal-500/50 group-hover:bg-teal-400 transition-colors" />
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-zinc-800 text-xs text-zinc-300">4</span>
+                  Official Company Career Watcher
+                </h2>
+                <button
+                  onClick={handleTriggerWatcherCron}
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 px-3 py-1.5 rounded-xl transition-all"
+                >
+                  Trigger All Watches
+                </button>
+              </div>
+              <p className="text-xs text-zinc-400 mb-6">
+                Register specific companies, roles, and locations. The system automatically maps the official search portal and alerts you on Telegram when matches show up.
+              </p>
+
+              <form onSubmit={handleAddWatch} className="flex flex-col gap-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">
+                      Company Name
+                    </label>
+                    <input
+                      type="text"
+                      value={companyWatchInput}
+                      onChange={(e) => setCompanyWatchInput(e.target.value)}
+                      placeholder="e.g. Google, Stripe"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-teal-500/50 transition-colors"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">
+                      Role Query
+                    </label>
+                    <input
+                      type="text"
+                      value={roleWatchInput}
+                      onChange={(e) => setRoleWatchInput(e.target.value)}
+                      placeholder="e.g. Software Engineer"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-teal-500/50 transition-colors"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">
+                      Location Target
+                    </label>
+                    <input
+                      type="text"
+                      value={locationWatchInput}
+                      onChange={(e) => setLocationWatchInput(e.target.value)}
+                      placeholder="e.g. Canada, Remote"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-teal-500/50 transition-colors"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={addingWatch}
+                  className="bg-teal-500 hover:bg-teal-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-black font-bold text-xs py-3 rounded-xl transition-all shadow-md active:scale-98 flex items-center justify-center gap-1.5"
+                >
+                  {addingWatch ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                      Registering Watcher...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add Watch Query
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {/* Active Watches List */}
+              <div className="bg-zinc-950/40 border border-zinc-850 rounded-xl p-4">
+                <h4 className="text-xs font-bold text-zinc-300 mb-3 flex items-center justify-between">
+                  <span>Active Career Watchers</span>
+                  <span className="text-[10px] bg-zinc-850 px-2 py-0.5 rounded-full text-zinc-400 font-normal">
+                    {watches.length} configured
+                  </span>
+                </h4>
+
+                {loadingWatches ? (
+                  <div className="flex items-center justify-center py-4">
+                    <div className="w-5 h-5 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : watches.length === 0 ? (
+                  <div className="text-center py-6 text-xs text-zinc-500 italic">
+                    No active company career page watchers configured.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-1">
+                    {watches.map((watch) => (
+                      <div
+                        key={watch.id}
+                        className="bg-zinc-950 border border-zinc-900 rounded-lg p-3 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-white">{watch.companyName}</span>
+                            <span className="text-[10px] bg-teal-950/40 border border-teal-900/50 text-teal-400 px-1.5 py-0.5 rounded">
+                              {watch.role}
+                            </span>
+                            <span className="text-[10px] bg-zinc-850 px-1.5 py-0.5 rounded text-zinc-400">
+                              {watch.location}
+                            </span>
+                          </div>
+                          {watch.careerUrl && (
+                            <div className="text-[10px] text-zinc-500 truncate mt-1">
+                              URL: <a href={watch.careerUrl} target="_blank" rel="noopener noreferrer" className="hover:text-teal-400 underline">{watch.careerUrl}</a>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDeleteWatch(watch.id)}
+                          className="text-zinc-500 hover:text-red-400 p-1.5 hover:bg-zinc-900 rounded transition-colors shrink-0"
+                          title="Remove Watcher"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </section>
 
           </div>

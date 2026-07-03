@@ -91,6 +91,13 @@ import { MatchingModule } from '../matching/matching.module';
           removeOnComplete: { age: 600},
           removeOnFail: { age: 3600 },
         }
+      },
+      {
+        name: 'career-watcher-tasks',
+        defaultJobOptions: {
+          removeOnComplete: true,
+          removeOnFail: { age: 86400 }
+        }
       }
     ),
     DiscoveryModule,
