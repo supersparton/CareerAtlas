@@ -12,11 +12,15 @@
     "bullmq": "^5.8.5",
     "camoufox": "^0.1.19",
     "dotenv": "^16.4.5",
-    "playwright": "^1.60.0"
+    "playwright": "1.59.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
+  },
+  "overrides": {
+    "playwright-core": "1.59.0",
+    "playwright": "1.59.0"
   }
 }
