@@ -6,6 +6,7 @@ import { DatabaseService } from '../vector-store/database.service';
 import { PipelineCoordinatorService } from '../queues/pipeline-coordinator.service';
 import * as fs from 'fs';
 import * as path from 'path';
+import { injectTraceContext } from '../otel';
 
 @Injectable()
 export class AgentService implements OnApplicationBootstrap {
@@ -143,7 +144,7 @@ export class AgentService implements OnApplicationBootstrap {
       const targetLimit = 5;
       
       // Enqueue the first discovery job to kick off the BullMQ pipeline
-      await this.discoveryQueue.add('discover-jobs', {
+      await this.discoveryQueue.add('discover-jobs', injectTraceContext({
         runId,
         userId: resolvedUserId,
         searchTerms,
@@ -154,7 +155,7 @@ export class AgentService implements OnApplicationBootstrap {
         maxCycles: 3,
         page: 1,
         accumulatedMatches: [],
-      });
+      }));
 
       this.logger.log(`[ORCHESTRATOR] Successfully enqueued job search workflow in BullMQ for run ID: ${runId}`);
       await this.coordinator.addLog(runId, `Workflow enqueued in BullMQ. Queue processing active.`);

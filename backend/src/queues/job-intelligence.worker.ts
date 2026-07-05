@@ -4,6 +4,8 @@ import { Logger } from '@nestjs/common';
 import { JobIntelligenceService } from '../intelligence/job-intelligence.service';
 import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { Job } from '../discovery/discovery.service';
+import { extractTraceContext, injectTraceContext, tracer } from '../otel';
+import { context } from '@opentelemetry/api';
 
 interface IntelligenceJobPayload {
   runId: string;
@@ -36,34 +38,48 @@ export class IntelligenceWorker extends WorkerHost {
   }
 
   async process(bullJob: BullJob<IntelligenceJobPayload>): Promise<any> {
-    const { runId, discoveryPayload, job } = bullJob.data;
+    const parentCtx = extractTraceContext(bullJob.data);
+    return await context.with(parentCtx, async () => {
+      return await tracer.startActiveSpan('IntelligenceWorker.process', async (span) => {
+        const { runId, discoveryPayload, job } = bullJob.data;
 
-    try {
-      await this.coordinator.updateStep(runId, 'step-4', 'running');
+        span.setAttribute('run.id', runId);
+        span.setAttribute('job.title', job.title);
+        span.setAttribute('job.company', job.company);
 
-      // Call the LLM requirements extraction
-      const reqs = await this.jobIntelligenceService.extractRequirements(job);
+        try {
+          await this.coordinator.updateStep(runId, 'step-4', 'running');
 
-    this.logger.log(`[INTELLIGENCE-WORKER] Extracted requirements for: "${job.title}" at "${job.company}"`);
+          // Call the LLM requirements extraction
+          const reqs = await this.jobIntelligenceService.extractRequirements(job);
 
-      // Forward to Embedding Queue
-      await this.embeddingQueue.add('embed-job', {
-        runId,
-        discoveryPayload,
-        job,
-        requirements: reqs,
+          this.logger.log(`[INTELLIGENCE-WORKER] Extracted requirements for: "${job.title}" at "${job.company}"`);
+
+          // Forward to Embedding Queue
+          await this.embeddingQueue.add('embed-job', injectTraceContext({
+            runId,
+            discoveryPayload,
+            job,
+            requirements: reqs,
+          }));
+
+          span.setStatus({ code: 1 }); // OK
+          return { success: true };
+        } catch (err) {
+          this.logger.error(`[INTELLIGENCE-WORKER] Failed to process job intelligence: ${err.message}`);
+          span.recordException(err);
+          span.setStatus({ code: 2, message: err.message });
+
+          // Decrement on failure to prevent pipeline freeze
+          const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+          if (isBatchComplete) {
+            await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+          }
+          throw err;
+        } finally {
+          span.end();
+        }
       });
-
-      return { success: true };
-    } catch (err) {
-      this.logger.error(`[INTELLIGENCE-WORKER] Failed to process job intelligence: ${err.message}`);
-      
-      // Decrement on failure to prevent pipeline freeze
-      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-      if (isBatchComplete) {
-        await this.matchingQueue.add('evaluate', discoveryPayload);
-      }
-      throw err;
-    }
+    });
   }
 }

@@ -6,6 +6,8 @@ import { ProfileService } from '../profile/profile.service';
 import { NotifierService } from '../notifier/notifier.service';
 import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { DatabaseService } from '../vector-store/database.service';
+import { extractTraceContext, injectTraceContext, tracer } from '../otel';
+import { context } from '@opentelemetry/api';
 
 interface MatchingJobPayload {
   runId: string;
@@ -36,78 +38,91 @@ export class MatchingWorker extends WorkerHost {
   }
 
   async process(bullJob: BullJob<MatchingJobPayload>): Promise<any> {
-    const payload = bullJob.data;
-    const { runId, userId, searchTerms, activeTermIndex, locationSearch, limit, currentCycle, maxCycles, page } = payload;
-    const searchTerm = searchTerms[activeTermIndex] || '';
+    const parentCtx = extractTraceContext(bullJob.data);
+    return await context.with(parentCtx, async () => {
+      return await tracer.startActiveSpan('MatchingWorker.process', async (span) => {
+        const payload = bullJob.data;
+        const { runId, userId, searchTerms, activeTermIndex, locationSearch, limit, currentCycle, maxCycles, page } = payload;
+        const searchTerm = searchTerms[activeTermIndex] || '';
 
-    try {
-      await this.coordinator.updateStep(runId, 'step-6', 'running');
-      await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Running Vector Search, Hard Filters, and matching algorithms for "${searchTerm}"...`);
+        span.setAttribute('run.id', runId);
+        span.setAttribute('job.userId', userId);
+        span.setAttribute('job.search_term', searchTerm);
+        span.setAttribute('job.current_cycle', currentCycle);
+        span.setAttribute('job.limit', limit);
 
-      // Run Matching & Ranking engine against Qdrant
-      const currentMatches = await this.matchingService.matchAndRankJobs(userId, limit);
-      this.logger.log(`[MATCHING-WORKER] Found ${currentMatches.length} matching jobs in current cycle under run ${runId}`);
+        try {
+          await this.coordinator.updateStep(runId, 'step-6', 'running');
+          await this.coordinator.addLog(runId, `[Cycle ${currentCycle}] Running Vector Search, Hard Filters, and matching algorithms for "${searchTerm}"...`);
 
-      // Merge and deduplicate matches across cycles/terms
-      const prevMatches = payload.accumulatedMatches || [];
-      const allMatchesMap = new Map<string, any>();
-      for (const match of prevMatches) {
-        if (match && match.job && match.job.jobId) {
-          allMatchesMap.set(match.job.jobId, match);
-        }
-      }
-      for (const match of currentMatches) {
-        if (match && match.job && match.job.jobId) {
-          allMatchesMap.set(match.job.jobId, match);
-        }
-      }
-      const rankedMatches = Array.from(allMatchesMap.values());
-      this.logger.log(`[MATCHING-WORKER] Total accumulated matching jobs under run ${runId}: ${rankedMatches.length}`);
-      
-      const meetsLimit = rankedMatches.length >= limit;
+          // Run Matching & Ranking engine against Qdrant
+          const currentMatches = await this.matchingService.matchAndRankJobs(userId, limit);
+          this.logger.log(`[MATCHING-WORKER] Found ${currentMatches.length} matching jobs in current cycle under run ${runId}`);
+          span.setAttribute('job.current_matches_count', currentMatches.length);
 
-      if (!meetsLimit) {
-        if (currentCycle < maxCycles) {
-          // Increment page & cycle, and enqueue next search cycle for the current term
-          const nextCycle = currentCycle + 1;
-          const nextPage = page + 1;
+          // Merge and deduplicate matches across cycles/terms
+          const prevMatches = payload.accumulatedMatches || [];
+          const allMatchesMap = new Map<string, any>();
+          for (const match of prevMatches) {
+            if (match && match.job && match.job.jobId) {
+              allMatchesMap.set(match.job.jobId, match);
+            }
+          }
+          for (const match of currentMatches) {
+            if (match && match.job && match.job.jobId) {
+              allMatchesMap.set(match.job.jobId, match);
+            }
+          }
+          const rankedMatches = Array.from(allMatchesMap.values());
+          this.logger.log(`[MATCHING-WORKER] Total accumulated matching jobs under run ${runId}: ${rankedMatches.length}`);
+          span.setAttribute('job.accumulated_matches_count', rankedMatches.length);
 
-          await this.coordinator.addLog(
-            runId,
-            `[Cycle ${currentCycle}] Found ${rankedMatches.length}/${limit} matches. Starting Cycle ${nextCycle} for "${searchTerm}"...`
-          );
-          await this.coordinator.updateStep(runId, 'step-6', 'success');
+          const meetsLimit = rankedMatches.length >= limit;
 
-          await this.discoveryQueue.add('discover-jobs', {
-            ...payload,
-            currentCycle: nextCycle,
-            page: nextPage,
-            accumulatedMatches: rankedMatches,
-          });
+          if (!meetsLimit) {
+            if (currentCycle < maxCycles) {
+              // Increment page & cycle, and enqueue next search cycle for the current term
+              const nextCycle = currentCycle + 1;
+              const nextPage = page + 1;
 
-          return { continue: true, nextCycle, nextPage };
-        } else if (activeTermIndex + 1 < searchTerms.length) {
-          // Move to next search term, resetting cycle and page
-          const nextTermIndex = activeTermIndex + 1;
-          const nextTerm = searchTerms[nextTermIndex];
+              await this.coordinator.addLog(
+                runId,
+                `[Cycle ${currentCycle}] Found ${rankedMatches.length}/${limit} matches. Starting Cycle ${nextCycle} for "${searchTerm}"...`
+              );
+              await this.coordinator.updateStep(runId, 'step-6', 'success');
 
-          await this.coordinator.addLog(
-            runId,
-            `[Cycle ${currentCycle}] Completed all cycles for "${searchTerm}". Moving to next search title: "${nextTerm}"...`
-          );
-          await this.coordinator.updateStep(runId, 'step-6', 'success');
+              await this.discoveryQueue.add('discover-jobs', injectTraceContext({
+                ...payload,
+                currentCycle: nextCycle,
+                page: nextPage,
+                accumulatedMatches: rankedMatches,
+              }));
 
-          await this.discoveryQueue.add('discover-jobs', {
-            ...payload,
-            activeTermIndex: nextTermIndex,
-            currentCycle: 1,
-            page: 1,
-            accumulatedMatches: rankedMatches,
-          });
+              span.setStatus({ code: 1 }); // OK
+              return { continue: true, nextCycle, nextPage };
+            } else if (activeTermIndex + 1 < searchTerms.length) {
+              // Move to next search term, resetting cycle and page
+              const nextTermIndex = activeTermIndex + 1;
+              const nextTerm = searchTerms[nextTermIndex];
 
-          return { continue: true, nextTermIndex };
-        }
-      }
+              await this.coordinator.addLog(
+                runId,
+                `[Cycle ${currentCycle}] Completed all cycles for "${searchTerm}". Moving to next search title: "${nextTerm}"...`
+              );
+              await this.coordinator.updateStep(runId, 'step-6', 'success');
+
+              await this.discoveryQueue.add('discover-jobs', injectTraceContext({
+                ...payload,
+                activeTermIndex: nextTermIndex,
+                currentCycle: 1,
+                page: 1,
+                accumulatedMatches: rankedMatches,
+              }));
+
+              span.setStatus({ code: 1 }); // OK
+              return { continue: true, nextTermIndex };
+            }
+          }
 
       // We either met the limit or reached maxCycles. Perform ranking & notifications.
       await this.coordinator.updateStep(runId, 'step-6', 'success');
@@ -158,11 +173,8 @@ export class MatchingWorker extends WorkerHost {
               - Structured Match Details: ${reasoning}
               
               Guidelines:
-              1. If the candidate is a perfect match (all required skills matched, high score), write a highly positive response mentioning they are a perfect match.
-              2. If the candidate is missing any preferred skills, explain that the ranking is slightly lower because they miss specific preferred skills (mention those missing preferred skills).
-              3. If they failed eligibility or have low scores, be honest but professional about the mismatch in critical skills.
-              4. Explain the match clearly and professionally, highlighting the candidate's skills and projects that align.
-              5. Do not include any greeting or conversational fluff. Write exactly 2 sentences.
+              - Explain the match clearly and professionally, highlighting the candidate's skills and projects that align.
+              - Do not include any greeting or conversational fluff. Write exactly 2 sentences.
             `;
             const startTime = Date.now();
             const response = await this.profileService.invokeModel(reasoningPrompt);
@@ -214,11 +226,18 @@ export class MatchingWorker extends WorkerHost {
       await this.coordinator.updateStep(runId, 'step-7', 'success');
       await this.coordinator.completeRun(runId, `Workflow completed successfully. Found ${topJobs.length} matching jobs.`);
 
+      span.setStatus({ code: 1 }); // OK
       return { completed: true, count: topJobs.length };
     } catch (err: any) {
       this.logger.error(`[MATCHING-WORKER] Matching worker failed: ${err.message}`, err.stack);
       await this.coordinator.failRun(runId, `Matching stage failed: ${err.message}`);
+      span.recordException(err);
+      span.setStatus({ code: 2, message: err.message });
       throw err;
-    }
+        } finally {
+          span.end();
+        }
+      });
+    });
   }
 }

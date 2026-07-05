@@ -5,6 +5,8 @@ import { ValidationService } from '../validation/validation.service';
 import { ProfileService } from '../profile/profile.service';
 import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { Job } from '../discovery/discovery.service';
+import { extractTraceContext, injectTraceContext, tracer } from '../otel';
+import { context } from '@opentelemetry/api';
 
 interface ValidationJobPayload {
   runId: string;
@@ -38,64 +40,86 @@ export class ValidationWorker extends WorkerHost {
   }
 
   async process(bullJob: BullJob<ValidationJobPayload>): Promise<any> {
-    const { runId, discoveryPayload, job } = bullJob.data;
+    const parentCtx = extractTraceContext(bullJob.data);
+    return await context.with(parentCtx, async () => {
+      return await tracer.startActiveSpan('ValidationWorker.process', async (span) => {
+        const { runId, discoveryPayload, job } = bullJob.data;
 
-    try {
-      // Fetch user profile for location/remote checks
-      const profile = await this.profileService.getProfileById(discoveryPayload.userId);
+        span.setAttribute('run.id', runId);
+        span.setAttribute('job.title', job.title);
+        span.setAttribute('job.company', job.company);
 
-      const activeTerm = discoveryPayload.searchTerms[discoveryPayload.activeTermIndex] || '';
+        try {
+          // Fetch user profile for location/remote checks
+          const profile = await this.profileService.getProfileById(discoveryPayload.userId);
 
-      // Perform validation checks
-      const validationResult = await this.validationService.validateSingleJob(
-        job,
-        activeTerm,
-        profile,
-        discoveryPayload.userId
-      );
+          const activeTerm = discoveryPayload.searchTerms[discoveryPayload.activeTermIndex] || '';
 
-      if (!validationResult.valid) {
-        this.logger.log(`[VALIDATION-WORKER] Job discarded: "${job.title}" at "${job.company}" (${validationResult.reason})`);
-        
-        // Decrement remaining jobs counter
-        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-        if (isBatchComplete) {
-          this.logger.log(`[VALIDATION-WORKER] Batch complete after discard. Triggering matching...`);
-          await this.matchingQueue.add('evaluate', discoveryPayload);
+          // Perform validation checks
+          const validationResult = await this.validationService.validateSingleJob(
+            job,
+            activeTerm,
+            profile,
+            discoveryPayload.userId
+          );
+
+          if (!validationResult.valid) {
+            this.logger.log(`[VALIDATION-WORKER] Job discarded: "${job.title}" at "${job.company}" (${validationResult.reason})`);
+            span.setAttribute('job.validated', false);
+            span.setAttribute('job.discard_reason', validationResult.reason || '');
+
+            // Decrement remaining jobs counter
+            const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+            if (isBatchComplete) {
+              this.logger.log(`[VALIDATION-WORKER] Batch complete after discard. Triggering matching...`);
+              await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+            }
+            span.setStatus({ code: 1 }); // OK
+            return { valid: false, reason: validationResult.reason };
+          }
+
+          // If bypassed (job already exists in Qdrant store), skip LLM and Embedding extraction completely
+          if (validationResult.bypassed) {
+            this.logger.log(`[VALIDATION-WORKER] Job "${job.title}" already exists in Qdrant (semantic store). Bypassing Intelligence & Embedding layers.`);
+            span.setAttribute('job.validated', true);
+            span.setAttribute('job.bypassed', true);
+            await this.coordinator.addLog(runId, `Bypassed Intelligence & Embedding for "${job.title}" at ${job.company} (already indexed).`);
+
+            const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+            if (isBatchComplete) {
+              this.logger.log(`[VALIDATION-WORKER] Batch complete after bypass. Triggering matching...`);
+              await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+            }
+            span.setStatus({ code: 1 }); // OK
+            return { valid: true, bypassed: true };
+          }
+
+          // If valid and new, pass to Job Scraping Queue for deep anti-detect rendering
+          this.logger.log(`[VALIDATION-WORKER] Job approved: "${job.title}" at "${job.company}". Sending to Scraping Enrichment...`);
+          span.setAttribute('job.validated', true);
+          span.setAttribute('job.bypassed', false);
+          await this.scrapingQueue.add('scrape-job', injectTraceContext({
+            runId,
+            discoveryPayload,
+            job,
+          }));
+
+          span.setStatus({ code: 1 }); // OK
+          return { valid: true, bypassed: false };
+        } catch (err) {
+          this.logger.error(`[VALIDATION-WORKER] Exception validating job: ${err.message}`);
+          span.recordException(err);
+          span.setStatus({ code: 2, message: err.message });
+          // Decrement on failure to avoid pipeline freeze
+          const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+          if (isBatchComplete) {
+            await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+          }
+          throw err;
+        } finally {
+          span.end();
         }
-        return { valid: false, reason: validationResult.reason };
-      }
-
-      // If bypassed (job already exists in Qdrant store), skip LLM and Embedding extraction completely
-      if (validationResult.bypassed) {
-        this.logger.log(`[VALIDATION-WORKER] Job "${job.title}" already exists in Qdrant (semantic store). Bypassing Intelligence & Embedding layers.`);
-        await this.coordinator.addLog(runId, `Bypassed Intelligence & Embedding for "${job.title}" at ${job.company} (already indexed).`);
-        
-        const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-        if (isBatchComplete) {
-          this.logger.log(`[VALIDATION-WORKER] Batch complete after bypass. Triggering matching...`);
-          await this.matchingQueue.add('evaluate', discoveryPayload);
-        }
-        return { valid: true, bypassed: true };
-      }
-
-      // If valid and new, pass to Job Scraping Queue for deep anti-detect rendering
-      this.logger.log(`[VALIDATION-WORKER] Job approved: "${job.title}" at "${job.company}". Sending to Scraping Enrichment...`);
-      await this.scrapingQueue.add('scrape-job', {
-        runId,
-        discoveryPayload,
-        job,
       });
-
-      return { valid: true, bypassed: false };
-    } catch (err) {
-      this.logger.error(`[VALIDATION-WORKER] Exception validating job: ${err.message}`);
-      // Decrement on failure to avoid pipeline freeze
-      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-      if (isBatchComplete) {
-        await this.matchingQueue.add('evaluate', discoveryPayload);
-      }
-      throw err;
-    }
+    });
   }
 }

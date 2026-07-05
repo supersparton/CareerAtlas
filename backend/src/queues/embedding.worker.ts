@@ -6,6 +6,8 @@ import { JobIntelligenceService, JobRequirements } from '../intelligence/job-int
 import { MemoryService } from '../memory/memory.service';
 import { PipelineCoordinatorService } from './pipeline-coordinator.service';
 import { Job } from '../discovery/discovery.service';
+import { extractTraceContext, injectTraceContext, tracer } from '../otel';
+import { context } from '@opentelemetry/api';
 
 interface EmbeddingJobPayload {
   runId: string;
@@ -40,40 +42,54 @@ export class EmbeddingWorker extends WorkerHost {
   }
 
   async process(bullJob: BullJob<EmbeddingJobPayload>): Promise<any> {
-    const { runId, discoveryPayload, job, requirements } = bullJob.data;
+    const parentCtx = extractTraceContext(bullJob.data);
+    return await context.with(parentCtx, async () => {
+      return await tracer.startActiveSpan('EmbeddingWorker.process', async (span) => {
+        const { runId, discoveryPayload, job, requirements } = bullJob.data;
 
-    try {
-      await this.coordinator.updateStep(runId, 'step-5', 'running');
+        span.setAttribute('run.id', runId);
+        span.setAttribute('job.title', job.title);
+        span.setAttribute('job.company', job.company);
 
-      // Generate job description embedding text
-      const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${requirements.location}\nRequired Skills: ${requirements.requiredSkills.join(', ')}\nDescription: ${job.description}`;
-      this.logger.log(`[EMBEDDING-WORKER] Generating Job Embedding for ID: ${job.jobId}`);
-      
-      const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
+        try {
+          await this.coordinator.updateStep(runId, 'step-5', 'running');
 
-      // Save job details and embedding to Qdrant
-      await this.jobIntelligenceService.saveJobToDb(job, requirements, embedding);
+          // Generate job description embedding text
+          const textToEmbed = `Job Title: ${job.title}\nCompany: ${job.company}\nLocation: ${requirements.location}\nRequired Skills: ${requirements.requiredSkills.join(', ')}\nDescription: ${job.description}`;
+          this.logger.log(`[EMBEDDING-WORKER] Generating Job Embedding for ID: ${job.jobId}`);
 
-      // Mark as processed in local MemoryService cache
-      await this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
+          const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
 
-      // Decrement the remaining jobs counter in coordinator
-      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-      if (isBatchComplete) {
-        this.logger.log(`[EMBEDDING-WORKER] Batch complete. Triggering matching queue evaluation for run: ${runId}`);
-        await this.matchingQueue.add('evaluate', discoveryPayload);
-      }
+          // Save job details and embedding to Qdrant
+          await this.jobIntelligenceService.saveJobToDb(job, requirements, embedding);
 
-      return { success: true };
-    } catch (err) {
-      this.logger.error(`[EMBEDDING-WORKER] Failed to embed and save job: ${err.message}`);
-      
-      // Decrement on failure to prevent pipeline freeze
-      const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
-      if (isBatchComplete) {
-        await this.matchingQueue.add('evaluate', discoveryPayload);
-      }
-      throw err;
-    }
+          // Mark as processed in local MemoryService cache
+          await this.memoryService.markJobAsProcessed(job.company, job.title, job.location, job.source);
+
+          // Decrement the remaining jobs counter in coordinator
+          const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+          if (isBatchComplete) {
+            this.logger.log(`[EMBEDDING-WORKER] Batch complete. Triggering matching queue evaluation for run: ${runId}`);
+            await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+          }
+
+          span.setStatus({ code: 1 }); // OK
+          return { success: true };
+        } catch (err) {
+          this.logger.error(`[EMBEDDING-WORKER] Failed to embed and save job: ${err.message}`);
+          span.recordException(err);
+          span.setStatus({ code: 2, message: err.message });
+
+          // Decrement on failure to prevent pipeline freeze
+          const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
+          if (isBatchComplete) {
+            await this.matchingQueue.add('evaluate', injectTraceContext(discoveryPayload));
+          }
+          throw err;
+        } finally {
+          span.end();
+        }
+      });
+    });
   }
 }
