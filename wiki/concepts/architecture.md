@@ -60,6 +60,11 @@ graph TD
 ### 4. Browser Context Pooling
 - `CamoufoxScraperService` maintains a single running browser instance (`camoufox`). For each scrape task, it creates an isolated browser context (`newContext()`) and tab (`newPage()`), disposing of them immediately afterward. This yields a 10x reduction in memory/CPU overhead while preventing cookie tracking.
 
+### 5. End-to-End Tracing & Observability
+- **OpenTelemetry SDK**: Configured in `otel.ts` and loaded before anything else in `main.ts`. It auto-instruments HTTP calls, Express routing, NestJS core events, PostgreSQL queries, and Redis operations. Exposes Prometheus metrics on port `9464` and OTLP traces to Jaeger on port `4317`.
+- **Distributed Queue Context Propagation**: Context is injected into BullMQ job payloads at creation time (`injectTraceContext`) and extracted in workers during processing (`extractTraceContext`). Each worker process runs inside a custom tracing span, linking all asynchronous processing steps under a single parent trace.
+- **Observability Stack**: Built using Jaeger (port `16686`), Prometheus (port `9090`), and Grafana (port `3010`) to visualize spans and scrape metrics locally.
+
 ## Frontend State
 
 The frontend is a React Next.js application that streams active pipeline logs, coordinates resume parsing, and displays matching results from the backend in real-time.

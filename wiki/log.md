@@ -5,6 +5,13 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-07-03] release | OpenTelemetry and Grafana Observability Stack
+- Integrated OpenTelemetry Node SDK (`otel.ts`) and configured automatic instrumentation for HTTP, Express, NestJS core, PG, and Redis.
+- Bootstrapped OpenTelemetry on NestJS app start by importing `otel.ts` at the top of `main.ts`.
+- Implemented BullMQ distributed trace context propagation via `injectTraceContext` and `extractTraceContext`.
+- Wrapped all queue processor runs (`DiscoveryWorker`, `ValidationWorker`, `ScrapingWorker`, `IntelligenceWorker`, `EmbeddingWorker`, `MatchingWorker`) in custom active spans to connect them as a single parent trace tree.
+- Configured local observability stack via Docker Compose (`docker-compose.yml`) containing Jaeger (`16686`), Prometheus (`9090`), and Grafana (`3010`) with pre-provisioned data sources.
+
 ## [2026-06-30] release | Distributed Queue Migration, Redis Caching, fastembed & Browser Context Pooling
 - Migrated the linear agent service loop into a highly concurrent, distributed architecture using BullMQ message queues.
 - Replaced file-locked JSON cache maps (`processed_jobs.json`, `seen_jobs.json`) with Redis sets incorporating 24-hour expiration TTLs.
