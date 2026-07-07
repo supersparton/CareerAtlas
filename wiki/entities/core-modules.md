@@ -42,7 +42,7 @@ sequenceDiagram
     participant Validation as ValidationWorker
     participant Scraping as ScrapingWorker
     participant IntelWorker as IntelligenceWorker
-    participant EmbedWorker as EmbeddingWorker
+    particip    ant EmbedWorker as EmbeddingWorker
     participant Matching as MatchingWorker
     participant Coordinator as PipelineCoordinatorService
 
@@ -100,7 +100,7 @@ sequenceDiagram
 - **`EmbeddingsService`** depends on **Qdrant `fastembed`** (`@xenova/transformers` was replaced) to perform in-process, high-efficiency local embedding generation.
 - **`ValidationService`** depends on `@tiny-fish/sdk` (loaded dynamically via dynamic `import()` to bypass CommonJS packaging restrictions at runtime) to fetch and inspect job postings for 404 errors, empty content, or closed keywords.
 - **`CamoufoxScraperService`** depends on Playwright Firefox (`camoufox`) and implements browser session pooling (`isConnected()` checks) and page context recycling to eliminate CPU-heavy browser initialization overhead.
-- **`JobIntelligenceService`** depends on Groq, Gemini, or local Ollama LLMs to parse and structure unstructured job descriptions into typed JSON schemas.
+- **`JobIntelligenceService`** depends on Groq or Gemini LLMs (specifically `gemma-4-31b-it`) to parse and structure unstructured job descriptions into typed JSON schemas.
 - **`NotifierService`** depends on the Telegram Bot API.
 
 ## Operational Notes

@@ -123,7 +123,7 @@ The CareerAtlas Ingestion & Search Platform is an autonomous, AI-driven job-hunt
 #### A. User Onboarding & Resume Ingestion
 1.  **Resume Upload:** The Candidate selects a PDF resume on the Next.js Frontend and initiates parsing.
 2.  **Text Ingestion:** `ProfileController` receives the file, extracts the raw text via `pdf-parse`, and forwards it to `ProfileService`.
-3.  **LLM Structuring:** `ProfileService` calls the Groq API (fallback to Gemini/Ollama) to extract structured JSON profile details (full name, email, phone, target role, core skills, experience level, recent experience, and projects).
+3.  **LLM Structuring:** `ProfileService` calls the Groq API (fallback to Gemini) to extract structured JSON profile details (full name, email, phone, target role, core skills, experience level, recent experience, and projects).
 4.  **Database Persistence:** The parsed profile is mapped and stored in PostgreSQL (`users`, `user_skills`, and `user_preferences` tables), and user embeddings are generated for vector search.
 5.  **Title Recommender:** The LLM scans the candidate's skills and suggests relevant target job search titles, returning them to the Frontend.
 
@@ -150,7 +150,7 @@ The CareerAtlas Ingestion & Search Platform is an autonomous, AI-driven job-hunt
     *   **Relevance Check:** Filters out jobs matching negative keywords (sales, HR, marketing) or mismatching geographical preferences.
 
 #### E. Job Intelligence & Vector Store Ingestion
-14. **Requirements Extraction:** Validated jobs are processed in parallel chunks by `JobIntelligenceService`. It calls the LLM (Groq/Ollama) to extract structured requirements (required skills, preferred skills, required experience years, education, employment type, remote allowed, and resolved actual location).
+14. **Requirements Extraction:** Validated jobs are processed in parallel chunks by `JobIntelligenceService`. It calls the LLM (Groq/Gemini) to extract structured requirements (required skills, preferred skills, required experience years, education, employment type, remote allowed, and resolved actual location).
 15. **Description Embedding:** The `EmbeddingsService` generates a 384-dimension vector embedding based on the job title, company, location, skills, and full description.
 16. **Postgres Ingestion:** Job records are stored in `jobs`, requirements in `job_requirements`, and vector embeddings in the `job_embeddings` table.
 
@@ -178,7 +178,7 @@ The CareerAtlas Ingestion & Search Platform is an autonomous, AI-driven job-hunt
 *   **Stealth Playwright Evasion:** LinkedIn guest scraping assumes Playwright can successfully mask browser signatures and randomize navigation behavior to bypass rate limits.
 
 ### 5. Constraints & Limitations
-*   **Rate Limits:** High reliance on the Groq API can trigger rate limits on large scrapings. To mitigate this, a fallback hierarchy (Local Ollama → Gemini → Groq) is integrated.
+*   **Rate Limits:** High reliance on the Groq API can trigger rate limits on large scrapings. To mitigate this, a fallback hierarchy (Gemini [Gemma-4] → Groq) is integrated.
 *   **Stealth Scraping Fragility:** playbooks are vulnerable to layout changes by LinkedIn, causing Playwright selectors to occasionally require adjustments.
 *   **File Locks:** Concurrent writes to the local JSON caches (`seen_jobs.json`) can cause file locking issues if multiple scraping threads terminate at the exact same millisecond.
 

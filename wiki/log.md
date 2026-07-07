@@ -5,6 +5,12 @@ date: 2026-05-30
 tags: [careeratlas, log, history, changelog]
 ---
 
+## [2026-07-07] release | LLM Gateway Updates: Removed Ollama & Integrated Gemma-4-31b-it
+- Completely removed local Ollama configuration and fallbacks from environment variables and code.
+- Fixed Gemini provider registration in `LlmGatewayService` to use the correct `ChatGoogleGenerativeAI` LangChain class instead of the input type definition interface.
+- Configured the Gemini client to utilize the `gemma-4-31b-it` model via the correct `modelName` constructor parameter.
+- Updated system wiki pages, entities overview, and flowcharts.
+
 ## [2026-07-03] release | OpenTelemetry and Grafana Observability Stack
 - Integrated OpenTelemetry Node SDK (`otel.ts`) and configured automatic instrumentation for HTTP, Express, NestJS core, PG, and Redis.
 - Bootstrapped OpenTelemetry on NestJS app start by importing `otel.ts` at the top of `main.ts`.

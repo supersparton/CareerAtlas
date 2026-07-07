@@ -37,7 +37,7 @@ The backend is fully asynchronous and queue-driven. The `DiscoveryModule` orches
 flowchart TD
     A["Job Discovery Agents (LinkedIn / TinyFish API)"] --> B["Validation Service (Database & Qdrant check)"]
     B --> C["Camoufox Scraper (Browser pooling)"]
-    C --> D["LLM Requirements Extraction (Groq/Gemini/Ollama)"]
+    C --> D["LLM Requirements Extraction (Groq/Gemini)"]
     D --> E["Embedding Service (fastembed)"]
     E --> F["Matching Engine (O(1) flat Skill Index)"]
     F --> G["Telegram Alerts & DB Results"]
