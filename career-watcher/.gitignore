@@ -2,7 +2,8 @@
 /dist
 /node_modules
 /build
-
+python-agent
+python-agent/venv
 # Logs
 logs
 *.log
