@@ -65,7 +65,7 @@ export class MatchingService {
   private readonly logger = new Logger(MatchingService.name);
 
   // Skill Normalization Mapping
-  private readonly SKILL_MAP: Record<string, string> = {
+  private static readonly SKILL_MAP: Record<string, string> = {
     'nestjs': 'node.js',
     'express': 'node.js',
     'expressjs': 'node.js',
@@ -73,8 +73,6 @@ export class MatchingService {
     'fastapi': 'python',
     'django': 'python',
     'flask': 'python',
-    'numpy': 'python',
-    'pandas': 'python',
     'reactjs': 'react',
     'react.js': 'react',
     'nextjs': 'react',
@@ -94,14 +92,24 @@ export class MatchingService {
     'k8s': 'devops',
   };
 
+  get SKILL_MAP(): Record<string, string> {
+    return MatchingService.SKILL_MAP;
+  }
+
+  private static normalizeSkill(skill: string): string {
+    if (!skill) return '';
+    const clean = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
+    return MatchingService.SKILL_MAP[clean] || clean;
+  }
+
   // Pre-compiled skill index for O(1) ontology lookups
   private static readonly SKILL_INDEX: Record<string, { family: string; subfamily: string }> = (() => {
     const index: Record<string, { family: string; subfamily: string }> = {};
     for (const [family, subfamilies] of Object.entries(ROLE_ONTOLOGY)) {
       for (const [subfamily, skills] of Object.entries(subfamilies)) {
         for (const skill of skills) {
-          const cleanSkill = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
-          index[cleanSkill] = { family, subfamily };
+          const normSkill = MatchingService.normalizeSkill(skill);
+          index[normSkill] = { family, subfamily };
         }
       }
     }
@@ -408,9 +416,7 @@ ${this.stats.solelyExperienceReject}
   }
 
   private normalizeSkillName(skill: string): string {
-    if (!skill) return '';
-    const clean = skill.toLowerCase().trim().replace(/[^a-z0-9\s#\+\.]/g, '');
-    return this.SKILL_MAP[clean] || clean;
+    return MatchingService.normalizeSkill(skill);
   }
 
   /**
@@ -513,7 +519,8 @@ ${this.stats.solelyExperienceReject}
 
       let bestSkillsFamily: string | null = null;
       let maxFamilyCount = 0;
-      for (const [fam, cnt] of Object.entries(familyCounts)) {
+      const sortedFamilies = Object.entries(familyCounts).sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [fam, cnt] of sortedFamilies) {
         if (cnt > maxFamilyCount) {
           maxFamilyCount = cnt;
           bestSkillsFamily = fam;
@@ -522,7 +529,8 @@ ${this.stats.solelyExperienceReject}
 
       let bestSkillsSubfamily: string | null = null;
       let maxSubfamilyCount = 0;
-      for (const [sub, cnt] of Object.entries(subfamilyCounts)) {
+      const sortedSubfamilies = Object.entries(subfamilyCounts).sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [sub, cnt] of sortedSubfamilies) {
         if (cnt > maxSubfamilyCount) {
           maxSubfamilyCount = cnt;
           bestSkillsSubfamily = sub;
@@ -882,5 +890,41 @@ ${this.stats.solelyExperienceReject}
       this.logger.error(`[MATCHING] Qdrant Error loading ingested jobs: ${err.message}`);
     }
     return list;
+  }
+
+  async scoreSingleJob(profile: UserProfile, jobPayload: any): Promise<number> {
+    try {
+      const userFamilySub = this.determineFamilyAndSubfamily(profile.preferredRoles[0] || '', profile.skills);
+      const jobFamilySub = this.determineFamilyAndSubfamily(jobPayload.title || '', jobPayload.requiredSkills || []);
+
+      const domainScore = this.calculateDomainScore(
+        userFamilySub.family,
+        userFamilySub.subfamily,
+        jobFamilySub.family,
+        jobFamilySub.subfamily
+      );
+
+      const requiredSkillResult = this.calculateSkillScore(profile.skills, jobPayload.requiredSkills || []);
+      const preferredSkillResult = this.calculateSkillScore(profile.skills, jobPayload.preferredSkills || []);
+      const experienceResult = this.computeExperienceScore(profile.experienceYears, jobPayload.experienceRequired || 0);
+      const locationScore = this.calculateLocationScore(profile, {
+        location: jobPayload.location || 'Remote',
+        remoteAllowed: !!jobPayload.remoteAllowed,
+        employmentType: jobPayload.employmentType || 'Full-time'
+      } as any);
+
+      const overallScore = Math.round(
+        requiredSkillResult.score * 0.45 +
+        domainScore * 0.35 +
+        experienceResult.score * 0.10 +
+        locationScore * 0.05 +
+        preferredSkillResult.score * 0.05
+      );
+
+      return overallScore;
+    } catch (err) {
+      this.logger.error(`[MATCHING] scoreSingleJob failed: ${err.message}`);
+      return 0;
+    }
   }
 }

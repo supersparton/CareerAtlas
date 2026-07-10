@@ -75,6 +75,127 @@ export default function Home() {
   const [results, setResults] = useState<JobResult[]>([]);
   const [loadingResults, setLoadingResults] = useState<boolean>(false);
 
+  // Resume version management and optimization state
+  const [versions, setVersions] = useState<any[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState<boolean>(false);
+  const [showVersionsModal, setShowVersionsModal] = useState<boolean>(false);
+  const [showOptimizeDrawer, setShowOptimizeDrawer] = useState<boolean>(false);
+  const [optimizingJobId, setOptimizingJobId] = useState<string | null>(null);
+  const [optimizingJobTitle, setOptimizingJobTitle] = useState<string | null>(null);
+  const [optimizationReport, setOptimizationReport] = useState<any | null>(null);
+  const [optimizedResumeData, setOptimizedResumeData] = useState<any | null>(null);
+  const [savingVersion, setSavingVersion] = useState<boolean>(false);
+  const [newVersionName, setNewVersionName] = useState<string>("");
+  const [newVersionNotes, setNewVersionNotes] = useState<string>("");
+
+  const fetchVersions = async (email: string) => {
+    setLoadingVersions(true);
+    try {
+      const res = await fetch(`/api/profile/versions?email=${encodeURIComponent(email)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setVersions(data || []);
+      }
+    } catch (e: any) {
+      addLog(`Error loading resume versions: ${e.message}`);
+    } finally {
+      setLoadingVersions(false);
+    }
+  };
+
+  const promoteVersion = async (versionId: number) => {
+    if (!profile?.email) return;
+    try {
+      const res = await fetch(`/api/profile/versions/${versionId}/promote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: profile.email }),
+      });
+      if (res.ok) {
+        addLog(`Promoted resume version to default active.`);
+        fetchProfile();
+      }
+    } catch (e: any) {
+      addLog(`Failed to promote version: ${e.message}`);
+    }
+  };
+
+  const deleteVersion = async (versionId: number) => {
+    if (!profile?.email) return;
+    if (!confirm("Are you sure you want to delete this version?")) return;
+    try {
+      const res = await fetch(`/api/profile/versions/${versionId}?email=${encodeURIComponent(profile.email)}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        addLog(`Deleted resume version.`);
+        fetchVersions(profile.email);
+      }
+    } catch (e: any) {
+      addLog(`Failed to delete version: ${e.message}`);
+    }
+  };
+
+  const triggerOptimization = async (jobId: string, jobTitle: string) => {
+    if (!profile?.email) {
+      alert("Please upload a resume first to run optimization.");
+      return;
+    }
+    setOptimizingJobId(jobId);
+    setOptimizingJobTitle(jobTitle);
+    setShowOptimizeDrawer(true);
+    setOptimizationReport(null);
+    setOptimizedResumeData(null);
+    setNewVersionName(`Optimized - ${jobTitle}`);
+    setNewVersionNotes(`Optimized for ${jobTitle} role.`);
+
+    try {
+      const res = await fetch("/api/profile/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: profile.email, jobId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOptimizationReport(data.report);
+        setOptimizedResumeData(data.optimizedResumeData);
+      } else {
+        const errMsg = await res.text();
+        throw new Error(errMsg);
+      }
+    } catch (e: any) {
+      addLog(`Error optimizing resume: ${e.message}`);
+    }
+  };
+
+  const saveOptimizedVersion = async () => {
+    if (!profile?.email || !optimizedResumeData) return;
+    setSavingVersion(true);
+    try {
+      const res = await fetch("/api/profile/save-version", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: profile.email,
+          name: newVersionName,
+          resumeData: optimizedResumeData,
+          sourceType: "optimization",
+          jobId: optimizingJobId,
+          notes: newVersionNotes
+        }),
+      });
+      if (res.ok) {
+        addLog(`Saved optimized resume version: ${newVersionName}`);
+        fetchVersions(profile.email);
+        setShowOptimizeDrawer(false);
+      }
+    } catch (e: any) {
+      addLog(`Error saving resume version: ${e.message}`);
+    } finally {
+      setSavingVersion(false);
+    }
+  };
+
   // Pipeline Flow steps state
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
     { id: "step-1", name: "1. Profile Sync & User Embedding", description: "Saves structured profile and uploads experience/achievements to user_embeddings", status: "idle" },
@@ -161,6 +282,7 @@ export default function Home() {
           addLog("Loaded existing profile from backend cache.");
           fetchSuggestions(data.email);
           fetchResults(data.email);
+          fetchVersions(data.email);
         }
       }
     } catch (e) {
@@ -723,9 +845,22 @@ export default function Home() {
 
             {/* Profile Info Preview */}
             <section className="bg-zinc-900/20 backdrop-blur-md rounded-2xl border border-zinc-850 p-6 shadow-xl flex-1 flex flex-col">
-              <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4">
-                Parsed Profile Metadata Summary
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                  Parsed Profile Metadata Summary
+                </h3>
+                {profile && (
+                  <button
+                    onClick={() => setShowVersionsModal(true)}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-lg hover:border-zinc-700 transition-all"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    Manage Versions (${versions.length})
+                  </button>
+                )}
+              </div>
 
               {profile ? (
                 <div className="flex-1 overflow-y-auto flex flex-col gap-4 text-sm text-zinc-300">
@@ -897,7 +1032,16 @@ export default function Home() {
                       )}
                     </div>
 
-                    <div className="mt-5 pt-4 border-t border-zinc-850/50 flex items-center justify-end">
+                    <div className="mt-5 pt-4 border-t border-zinc-850/50 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => triggerOptimization(item.jobId, item.title)}
+                        className="bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/40 hover:border-emerald-700 text-emerald-300 px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Optimize Resume
+                      </button>
                       {item.url && (item.url.startsWith("http://") || item.url.startsWith("https://")) ? (
                         <a
                           href={item.url}
@@ -920,6 +1064,399 @@ export default function Home() {
             </div>
           )}
         </section>
+
+        {/* Manage Versions Modal */}
+        {showVersionsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col max-h-[85vh]">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    Resume Versions History
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Manage your optimized and uploaded versions. The default version is used for automatic matching.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowVersionsModal(false)}
+                  className="text-zinc-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-1">
+                {loadingVersions ? (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-2" />
+                    <span className="text-sm text-zinc-500">Loading versions...</span>
+                  </div>
+                ) : versions.length === 0 ? (
+                  <div className="text-center py-12 border border-dashed border-zinc-800 rounded-xl bg-zinc-950/20 text-zinc-500 text-sm">
+                    No saved versions found.
+                  </div>
+                ) : (
+                  versions.map((ver) => (
+                    <div
+                      key={ver.id}
+                      className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${
+                        ver.isDefault
+                          ? "bg-emerald-950/20 border-emerald-500/40"
+                          : "bg-zinc-950/40 border-zinc-850 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-white truncate">{ver.name}</span>
+                          <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded font-mono">
+                            v{ver.versionNumber}
+                          </span>
+                          {ver.isDefault && (
+                            <span className="text-[10px] bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded-full font-bold">
+                              Default Active
+                            </span>
+                          )}
+                          <span className="text-[10px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded capitalize">
+                            {ver.sourceType.replace('_', ' ')}
+                          </span>
+                        </div>
+                        {ver.notes && <p className="text-xs text-zinc-400 mt-1 truncate">{ver.notes}</p>}
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Created {new Date(ver.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!ver.isDefault && (
+                          <button
+                            onClick={() => promoteVersion(ver.id)}
+                            className="text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-emerald-400 font-semibold px-3 py-1.5 rounded-lg transition-all"
+                            title="Promote this version to default active & update matching vector"
+                          >
+                            Set Default
+                          </button>
+                        )}
+                        <a
+                          href={`/api/profile/versions/${ver.id}/download`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="bg-emerald-500 hover:bg-emerald-400 text-black p-2 rounded-lg transition-all flex items-center justify-center"
+                          title="Download professional A4 PDF"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        </a>
+                        {!ver.isDefault && (
+                          <button
+                            onClick={() => deleteVersion(ver.id)}
+                            className="bg-red-950/20 border border-red-900/50 hover:bg-red-900/40 text-red-400 p-2 rounded-lg transition-all"
+                            title="Delete this version"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Resume Optimizer Drawer */}
+        {showOptimizeDrawer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/85 backdrop-blur-sm">
+            <div className="bg-zinc-900 border-l border-zinc-800 w-full max-w-5xl h-full p-6 shadow-2xl flex flex-col relative overflow-hidden">
+              
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    AI Resume Optimizer
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Target Job: <span className="text-white font-semibold">{optimizingJobTitle}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowOptimizeDrawer(false)}
+                  className="text-zinc-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {!optimizationReport ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center">
+                  <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="flex flex-col gap-1 max-w-md">
+                    <span className="text-sm font-semibold text-white">Ingesting target job details...</span>
+                    <span className="text-xs text-zinc-505">Mapping skill ontology synonyms, executing whole-section LLM optimization, and performing candidate-aware layout reordering...</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto flex flex-col gap-6 pr-2">
+                  
+                  {/* Warnings */}
+                  {optimizationReport.warnings && optimizationReport.warnings.length > 0 && (
+                    <div className="bg-yellow-950/20 border border-yellow-800/30 p-4 rounded-xl flex flex-col gap-2">
+                      <div className="flex items-center gap-2 text-yellow-500 font-bold text-xs uppercase tracking-wider">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        Optimisation Profile Notice
+                      </div>
+                      <ul className="flex flex-col gap-1">
+                        {optimizationReport.warnings.map((warn: string, idx: number) => (
+                          <li key={idx} className="text-xs text-zinc-350 leading-relaxed flex items-start gap-1.5">
+                            <span className="text-yellow-500 mt-0.5">•</span>
+                            <span>{warn}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Score & Explanations */}
+                  <div className="bg-zinc-950/60 border border-zinc-850 p-5 rounded-2xl flex flex-col md:flex-row items-center gap-6">
+                    <div className="flex items-center gap-4 shrink-0">
+                      <div className="flex flex-col items-center p-3 bg-zinc-900 border border-zinc-800 rounded-xl w-24">
+                        <span className="text-[10px] text-zinc-505 uppercase font-mono">Original</span>
+                        <span className="text-xl font-extrabold text-zinc-400">{optimizationReport.overallMatchScore}%</span>
+                      </div>
+                      <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                      </svg>
+                      <div className="flex flex-col items-center p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl w-24">
+                        <span className="text-[10px] text-emerald-400 uppercase font-mono">Optimized</span>
+                        <span className="text-xl font-extrabold text-emerald-400">{optimizationReport.optimizedMatchScore}%</span>
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Score Optimization Summary</h4>
+                      <ul className="flex flex-col gap-1.5">
+                        {optimizationReport.scoreIncreaseExplanation.map((exp: string, idx: number) => (
+                          <li key={idx} className="text-xs text-zinc-350 flex items-start gap-2">
+                            <span className="text-emerald-400 mt-0.5">•</span>
+                            <span>{exp}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  {/* Gap Analysis */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-zinc-950/40 border border-zinc-850 rounded-xl p-4">
+                      <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-3">Matching Skills</h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {optimizationReport.matchingSkills.map((s: string) => (
+                          <span key={s} className="bg-emerald-950/40 border border-emerald-900/30 text-emerald-300 text-xs px-2.5 py-1 rounded-md">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-zinc-950/40 border border-zinc-850 rounded-xl p-4">
+                      <h4 className="text-xs font-bold text-yellow-500 uppercase tracking-wider mb-3">Missing Skills (Allowed Synonym/Gap)</h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {optimizationReport.missingSkills.map((s: string) => (
+                          <span key={s} className="bg-yellow-950/20 border border-yellow-900/30 text-yellow-400/85 text-xs px-2.5 py-1 rounded-md">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Diff */}
+                  {optimizationReport.rewrittenSummary && (
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Rewritten Professional Summary</h4>
+                      <div className="border border-zinc-850 rounded-xl overflow-hidden">
+                        <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-850 flex items-center justify-between">
+                          <span className="text-xs font-bold text-white">Summary Section</span>
+                          <span className="text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30">
+                            ATS Alignment Optimized
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zinc-850">
+                          <div className="p-4 bg-red-950/5">
+                            <span className="text-[10px] text-red-400 uppercase font-mono block mb-1">Original Summary</span>
+                            <p className="text-xs text-zinc-400 whitespace-pre-line leading-relaxed">{optimizationReport.rewrittenSummary.original}</p>
+                          </div>
+                          <div className="p-4 bg-emerald-950/5">
+                            <span className="text-[10px] text-emerald-400 uppercase font-mono block mb-1">Optimized Summary</span>
+                            <p className="text-xs text-emerald-250 whitespace-pre-line leading-relaxed">{optimizationReport.rewrittenSummary.optimized}</p>
+                            {optimizationReport.rewrittenSummary.explanation && (
+                              <div className="mt-3 text-[10px] text-zinc-450 italic bg-zinc-900/60 p-2 rounded">
+                                {optimizationReport.rewrittenSummary.explanation}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bullet Points Diff */}
+                  {optimizationReport.rewrittenBullets && optimizationReport.rewrittenBullets.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Rewritten Experience Bullets</h4>
+                      <div className="flex flex-col gap-4">
+                        {optimizationReport.rewrittenBullets.map((bullet: any, idx: number) => (
+                          <div key={idx} className="border border-zinc-850 rounded-xl overflow-hidden">
+                            <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-850 flex items-center justify-between">
+                              <span className="text-xs font-bold text-white">{bullet.company}</span>
+                              <span className="text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30">
+                                Verb & Keyword Upgraded
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zinc-850">
+                              <div className="p-4 bg-red-950/5">
+                                <span className="text-[10px] text-red-400 uppercase font-mono block mb-1">Original Description</span>
+                                <p className="text-xs text-zinc-400 whitespace-pre-line leading-relaxed">{bullet.original}</p>
+                              </div>
+                              <div className="p-4 bg-emerald-950/5">
+                                <span className="text-[10px] text-emerald-400 uppercase font-mono block mb-1">Optimized Description</span>
+                                <p className="text-xs text-emerald-250 whitespace-pre-line leading-relaxed">{bullet.optimized}</p>
+                                {bullet.explanation && (
+                                  <div className="mt-3 text-[10px] text-zinc-450 italic bg-zinc-900/60 p-2 rounded">
+                                    {bullet.explanation}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Projects Diff */}
+                  {optimizationReport.rewrittenProjects && optimizationReport.rewrittenProjects.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Rewritten Projects</h4>
+                      <div className="flex flex-col gap-4">
+                        {optimizationReport.rewrittenProjects.map((proj: any, idx: number) => (
+                          <div key={idx} className="border border-zinc-850 rounded-xl overflow-hidden">
+                            <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-850 flex items-center justify-between">
+                              <span className="text-xs font-bold text-white">{proj.title}</span>
+                              <span className="text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30">
+                                Project Optimized
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zinc-850">
+                              <div className="p-4 bg-red-950/5">
+                                <span className="text-[10px] text-red-400 uppercase font-mono block mb-1">Original Description</span>
+                                <p className="text-xs text-zinc-400 whitespace-pre-line leading-relaxed">{proj.original}</p>
+                              </div>
+                              <div className="p-4 bg-emerald-950/5">
+                                <span className="text-[10px] text-emerald-400 uppercase font-mono block mb-1">Optimized Description</span>
+                                <p className="text-xs text-emerald-250 whitespace-pre-line leading-relaxed">{proj.optimized}</p>
+                                {proj.explanation && (
+                                  <div className="mt-3 text-[10px] text-zinc-450 italic bg-zinc-900/60 p-2 rounded">
+                                    {proj.explanation}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Validation summary */}
+                  <div className="bg-zinc-950/20 border border-zinc-850 rounded-xl p-4 flex flex-wrap gap-x-6 gap-y-2 justify-between items-center">
+                    <span className="text-xs text-zinc-400">System Validation Checklist:</span>
+                    <div className="flex gap-4 flex-wrap">
+                      <span className="text-xs text-emerald-400 flex items-center gap-1">
+                        ✓ No Fabricated Exp
+                      </span>
+                      <span className="text-xs text-emerald-400 flex items-center gap-1">
+                        ✓ No Fake Skills
+                      </span>
+                      <span className="text-xs text-emerald-400 flex items-center gap-1">
+                        ✓ Layout & Style Preserved
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Save version form */}
+                  <div className="border-t border-zinc-800 pt-5 mt-4 flex flex-col gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                          Resume Version Name
+                        </label>
+                        <input
+                          type="text"
+                          value={newVersionName}
+                          onChange={(e) => setNewVersionName(e.target.value)}
+                          placeholder="e.g. Optimized - Backend Engineer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                          Notes / Description
+                        </label>
+                        <input
+                          type="text"
+                          value={newVersionNotes}
+                          onChange={(e) => setNewVersionNotes(e.target.value)}
+                          placeholder="e.g. Highlighted NestJS, playbooks, microservices experience."
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 mt-2">
+                      <button
+                        onClick={() => setShowOptimizeDrawer(false)}
+                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold px-5 py-3 rounded-xl transition-all"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={saveOptimizedVersion}
+                        disabled={savingVersion || !newVersionName}
+                        className="text-xs bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold px-6 py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      >
+                        {savingVersion ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                            Saving Version...
+                          </>
+                        ) : (
+                          <>
+                            Save Resume Version
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

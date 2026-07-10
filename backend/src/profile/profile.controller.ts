@@ -1,8 +1,12 @@
-import { Controller, Post, Get, Body, UploadedFile, UseInterceptors, HttpCode, HttpStatus, Logger, Query, Param, Sse, MessageEvent } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Body, UploadedFile, UseInterceptors, HttpCode, HttpStatus, Logger, Query, Param, Sse, MessageEvent, Res } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ProfileService, UserProfile } from './profile.service';
+import { ResumeOptimizerService } from './resume-optimizer.service';
+import { ResumesService } from './resumes.service';
+import { PdfExportService } from './pdf-export.service';
 import { Observable } from 'rxjs';
 import { map, filter } from 'rxjs/operators';
+import { Response } from 'express';
 
 export interface StartWorkflowDto {
   searchTerms: string[];
@@ -15,7 +19,12 @@ export interface StartWorkflowDto {
 export class ProfileController {
   private readonly logger = new Logger(ProfileController.name);
 
-  constructor(private readonly profileService: ProfileService) {}
+  constructor(
+    private readonly profileService: ProfileService,
+    private readonly resumeOptimizerService: ResumeOptimizerService,
+    private readonly resumesService: ResumesService,
+    private readonly pdfExportService: PdfExportService,
+  ) {}
 
   @Post('upload-resume')
   @UseInterceptors(FileInterceptor('file'))
@@ -104,5 +113,74 @@ export class ProfileController {
     const searchTerms = await this.profileService.suggestJobTitles(profile);
     const limitedTerms = searchTerms.slice(0, 1);
     return { searchTerms: limitedTerms.length > 0 ? limitedTerms : ['Software Engineer'] };
+  }
+
+  @Post('optimize')
+  async optimize(
+    @Body() body: { email: string; jobId: string }
+  ): Promise<{ report: any; optimizedResumeData: any }> {
+    const user = await this.profileService.getProfileByEmail(body.email);
+    if (!user || !user.id) {
+      throw new Error(`Profile not found for email: ${body.email}`);
+    }
+    return this.resumeOptimizerService.optimizeResume(user.id, body.jobId);
+  }
+
+  @Get('versions')
+  async listVersions(@Query('email') email: string): Promise<any[]> {
+    const user = await this.profileService.getProfileByEmail(email);
+    if (!user || !user.id) {
+      return [];
+    }
+    return this.resumesService.listVersions(user.id);
+  }
+
+  @Get('versions/:id')
+  async getVersionDetails(@Param('id') id: string): Promise<any> {
+    return this.resumesService.getResumeDetails(Number(id));
+  }
+
+  @Post('save-version')
+  async saveVersion(
+    @Body() body: { email: string; name: string; resumeData: any; sourceType: string; jobId?: string; notes?: string }
+  ): Promise<any> {
+    const user = await this.profileService.getProfileByEmail(body.email);
+    if (!user || !user.id) {
+      throw new Error(`Profile not found for email: ${body.email}`);
+    }
+    return this.resumesService.saveVersion(user.id, body.name, body.resumeData, body.sourceType, body.jobId, body.notes);
+  }
+
+  @Post('versions/:id/promote')
+  async promoteVersion(@Param('id') id: string, @Body() body: { email: string }): Promise<{ success: boolean }> {
+    const user = await this.profileService.getProfileByEmail(body.email);
+    if (!user || !user.id) {
+      throw new Error(`Profile not found for email: ${body.email}`);
+    }
+    const success = await this.resumesService.promoteToDefault(user.id, Number(id));
+    return { success };
+  }
+
+  @Delete('versions/:id')
+  async deleteVersion(@Param('id') id: string, @Query('email') email: string): Promise<{ success: boolean }> {
+    const user = await this.profileService.getProfileByEmail(email);
+    if (!user || !user.id) {
+      throw new Error(`Profile not found for email: ${email}`);
+    }
+    const success = await this.resumesService.deleteVersion(user.id, Number(id));
+    return { success };
+  }
+
+  @Get('versions/:id/download')
+  async downloadPdf(@Param('id') id: string, @Res() res: any): Promise<void> {
+    const details = await this.resumesService.getResumeDetails(Number(id));
+    if (!details) {
+      res.status(HttpStatus.NOT_FOUND).send('Resume version not found');
+      return;
+    }
+    const pdfBuffer = await this.pdfExportService.generatePdf(details);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${details.name.replace(/\s+/g, '_')}.pdf"`);
+    res.send(pdfBuffer);
   }
 }

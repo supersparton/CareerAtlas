@@ -7,11 +7,31 @@ import { PromptTemplate } from '@langchain/core/prompts';
 import pdfParse from 'pdf-parse';
 import { Subject, Observable } from 'rxjs';
 
+export interface ResumeWorkExperience {
+  company: string;
+  role: string;
+  duration: string;
+  description: string;
+}
+
+export interface ResumeProject {
+  title: string;
+  techStack: string[];
+  description: string;
+}
+
+export interface ResumeEducation {
+  institution: string;
+  degree: string;
+  duration: string;
+}
+
 export interface UserProfile {
   id?: number;
   fullName: string;
   email: string;
   phone?: string;
+  summary?: string;
   skills: string[];
   experienceYears: number;
   education: string[];
@@ -22,7 +42,12 @@ export interface UserProfile {
     locations: string[];
     remote: boolean;
     employmentTypes: string[];
+    salaryExpectation?: number;
   };
+  experience?: ResumeWorkExperience[];
+  projectDetails?: ResumeProject[];
+  educationDetails?: ResumeEducation[];
+  sectionOrder?: string[];
 }
 
 export interface ParsedProfile {
@@ -279,15 +304,38 @@ You MUST respond ONLY with a valid JSON object matching the following structure:
   "fullName": "John Doe",
   "email": "johndoe@example.com",
   "phone": "+1234567890",
+  "summary": "A results-driven backend engineer with 3+ years of experience building scalable applications.",
   "skills": ["TypeScript", "NestJS", "PostgreSQL"],
   "experienceYears": 3.5,
   "education": ["B.Tech in Computer Science, IIT Bombay, 2022"],
   "projects": ["Built autonomous recommendation engine using pgvector"],
   "achievements": ["Ranked 1st in national level hackathon"],
-  "preferredRoles": ["Software Engineer", "Backend Developer"]
+  "preferredRoles": ["Software Engineer", "Backend Developer"],
+  "experienceDetails": [
+    {
+      "company": "Company Name",
+      "role": "Software Engineer",
+      "duration": "June 2022 - Present",
+      "description": "Led backend development using NestJS\\nOptimized query performance by 40%"
+    }
+  ],
+  "projectDetails": [
+    {
+      "title": "Autonomous Recommendation Engine",
+      "techStack": ["TypeScript", "pgvector", "PostgreSQL"],
+      "description": "Built recommendation engine matching resumes and jobs using similarity search"
+    }
+  ],
+  "educationDetails": [
+    {
+      "institution": "IIT Bombay",
+      "degree": "B.Tech in Computer Science",
+      "duration": "2018 - 2022"
+    }
+  ]
 }
 
-Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFERED ROLE OR NOT.Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THIS EXAMPLE VALUES.DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
+Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFERRED ROLE OR NOT. Extract the experience from the WORK SECTION of the resume AND NOT FROM ANYWHERE ELSE EXPLICITLY. DO NOT GUESS OR COPY THESE EXAMPLE VALUES. DO NOT INCLUDE ANY CONVERSATIONAL FILLER, EXPLANATION, OR MARKDOWN FORMATTING (such as \`\`\`json). RETURN ONLY THE RAW JSON OBJECT.`;
 
     try {
       const responseText = await this.invokeModelWithFallback(prompt);
@@ -314,6 +362,17 @@ Understand the intent of the resume and ONLY THEN DECIDE WHETHER TO ADD A PREFFE
         return [];
       };
 
+      const parseDetailsArray = (val: any): any[] => {
+        if (Array.isArray(val)) return val;
+        if (typeof val === 'string') {
+          try {
+            const parsed = JSON.parse(val);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {}
+        }
+        return [];
+      };
+
       const emailLower = String(parsedResult.email || '').trim().toLowerCase();
       const existingProfile = await this.getProfileByEmail(emailLower);
       console.log(`
@@ -325,10 +384,33 @@ canonical_role: ${existingProfile ? JSON.stringify(existingProfile.preferredRole
         ? parsedResult.skills.split(',').map(s => s.trim()).filter(Boolean)
         : parseArray(parsedResult.skills);
 
+      const rawExperience = parseDetailsArray(parsedResult.experienceDetails);
+      const experience = rawExperience.map((exp: any) => ({
+        company: String(exp.company || '').trim(),
+        role: String(exp.role || '').trim(),
+        duration: String(exp.duration || '').trim(),
+        description: String(exp.description || '').trim(),
+      })).filter(exp => exp.company && exp.role);
+
+      const rawProjects = parseDetailsArray(parsedResult.projectDetails);
+      const projectDetails = rawProjects.map((proj: any) => ({
+        title: String(proj.title || '').trim(),
+        techStack: Array.isArray(proj.techStack) ? proj.techStack.map(s => String(s).trim()) : [],
+        description: String(proj.description || '').trim(),
+      })).filter(proj => proj.title);
+
+      const rawEducation = parseDetailsArray(parsedResult.educationDetails);
+      const educationDetails = rawEducation.map((edu: any) => ({
+        institution: String(edu.institution || '').trim(),
+        degree: String(edu.degree || '').trim(),
+        duration: String(edu.duration || '').trim(),
+      })).filter(edu => edu.institution && edu.degree);
+
       const profile: UserProfile = {
         fullName: String(parsedResult.fullName || '').trim(),
         email: emailLower,
         phone: parsedResult.phone ? String(parsedResult.phone).trim() : undefined,
+        summary: parsedResult.summary ? String(parsedResult.summary).trim() : undefined,
         skills,
         experienceYears: parseFloat(parsedResult.experienceYears) || 0,
         education: parseArray(parsedResult.education),
@@ -340,6 +422,9 @@ canonical_role: ${existingProfile ? JSON.stringify(existingProfile.preferredRole
           remote: true,
           employmentTypes: ['Full-time'],
         },
+        experience,
+        projectDetails,
+        educationDetails
       };
 
       // Persist profile to the database
@@ -406,13 +491,77 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
         `, [userId, skill]);
       }
 
-      // 5. Generate User Embedding
-      // As per requirements: "User embedding should contain: Projects, Experience, Achievements, Education, and Skills"
+      // 5. Save Relational Resume Tables (Master Resume Version 1)
+      // Delete any previous default resumes to replace them with the new upload
+      await client.query('DELETE FROM resumes WHERE user_id = $1 AND is_default = TRUE', [userId]);
+      
+      const resumeRes = await client.query(`
+        INSERT INTO resumes (user_id, name, is_default, source_type, version_number, summary)
+        VALUES ($1, 'Master Resume', TRUE, 'manual_upload', 1, $2)
+        RETURNING id;
+      `, [userId, profile.summary]);
+      const resumeId = resumeRes.rows[0].id;
+
+      // Save resume skills
+      for (const skill of profile.skills) {
+        await client.query(`
+          INSERT INTO resume_skills (resume_id, skill)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `, [resumeId, skill]);
+      }
+
+      // Save resume experience
+      if (profile.experience && profile.experience.length > 0) {
+        for (let i = 0; i < profile.experience.length; i++) {
+          const exp = profile.experience[i];
+          await client.query(`
+            INSERT INTO resume_experience (resume_id, company, role, duration, description, display_order)
+            VALUES ($1, $2, $3, $4, $5, $6)
+          `, [resumeId, exp.company, exp.role, exp.duration, exp.description, i]);
+        }
+      }
+
+      // Save resume projects
+      if (profile.projectDetails && profile.projectDetails.length > 0) {
+        for (let i = 0; i < profile.projectDetails.length; i++) {
+          const proj = profile.projectDetails[i];
+          await client.query(`
+            INSERT INTO resume_projects (resume_id, title, tech_stack, description, display_order)
+            VALUES ($1, $2, $3, $4, $5)
+          `, [resumeId, proj.title, proj.techStack || [], proj.description, i]);
+        }
+      }
+
+      // Save resume education
+      if (profile.educationDetails && profile.educationDetails.length > 0) {
+        for (let i = 0; i < profile.educationDetails.length; i++) {
+          const edu = profile.educationDetails[i];
+          await client.query(`
+            INSERT INTO resume_education (resume_id, institution, degree, duration, display_order)
+            VALUES ($1, $2, $3, $4, $5)
+          `, [resumeId, edu.institution, edu.degree, edu.duration, i]);
+        }
+      }
+
+      // Save default section order
+      const sections = ['skills', 'experience', 'projects', 'education'];
+      for (let i = 0; i < sections.length; i++) {
+        await client.query(`
+          INSERT INTO resume_section_order (resume_id, section_name, display_order)
+          VALUES ($1, $2, $3)
+        `, [resumeId, sections[i], i + 1]);
+      }
+
+      // 6. Generate User Embedding
+      const expText = profile.experience?.map(e => `${e.role} at ${e.company} (${e.duration}): ${e.description}`).join('\n') || '';
+      const projText = profile.projectDetails?.map(p => `${p.title} (${p.techStack.join(', ')}): ${p.description}`).join('\n') || '';
       const textToEmbed = [
         `Target Roles: ${profile.preferredRoles.join(', ')}`,
         `Core Skills & Keywords: ${profile.skills.join(', ')}`,
-        `Education: ${profile.education.join('. ')}`,
-        `Projects: ${profile.projects.join('. ')}`,
+        `Education: ${profile.educationDetails?.map(edu => `${edu.degree} at ${edu.institution}`).join(', ') || profile.education.join('. ')}`,
+        `Projects: ${projText || profile.projects.join('. ')}`,
+        `Work Experience:\n${expText}`,
         `Achievements: ${profile.achievements.join('. ')}`,
         `Experience Years: ${profile.experienceYears}`
       ].join('\n');
@@ -421,7 +570,7 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
       this.logger.log('[PROFILE] Generating User Embedding...');
       const embedding = await this.embeddingsService.generateEmbedding(textToEmbed);
 
-      // 6. Save embedding to Qdrant vector database
+      // 7. Save embedding to Qdrant vector database
       this.emitTaskEvent(taskId, 'running', 'Indexing user embedding into Qdrant vector database...');
       await this.qdrantService.getClient().upsert('user_embeddings', {
         wait: true,
@@ -459,8 +608,6 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
 
       const user = userRes.rows[0];
       const prefRes = await this.db.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
-      const skillsRes = await this.db.query('SELECT skill FROM user_skills WHERE user_id = $1', [userId]);
-
       const pref = prefRes.rows[0] || {
         preferred_roles: [],
         locations: [],
@@ -472,24 +619,76 @@ canonical_role: ${JSON.stringify(savedProfile.preferredRoles)}
         achievements: [],
       };
 
-      const skills = skillsRes.rows.map(r => r.skill);
+      // Try to load the active default resume version
+      const resumeRes = await this.db.query('SELECT * FROM resumes WHERE user_id = $1 AND is_default = TRUE LIMIT 1', [userId]);
+      
+      let skills: string[] = [];
+      let experience: ResumeWorkExperience[] = [];
+      let projectDetails: ResumeProject[] = [];
+      let educationDetails: ResumeEducation[] = [];
+      let sectionOrder: string[] = [];
+
+      if (resumeRes.rows.length > 0) {
+        const resumeId = resumeRes.rows[0].id;
+        
+        // Fetch skills
+        const skillsRes = await this.db.query('SELECT skill FROM resume_skills WHERE resume_id = $1', [resumeId]);
+        skills = skillsRes.rows.map(r => r.skill);
+
+        // Fetch experience
+        const expRes = await this.db.query('SELECT company, role, duration, description FROM resume_experience WHERE resume_id = $1 ORDER BY display_order ASC', [resumeId]);
+        experience = expRes.rows;
+
+        // Fetch projects
+        const projRes = await this.db.query('SELECT title, tech_stack as "techStack", description FROM resume_projects WHERE resume_id = $1 ORDER BY display_order ASC', [resumeId]);
+        projectDetails = projRes.rows;
+
+        // Fetch education
+        const eduRes = await this.db.query('SELECT institution, degree, duration FROM resume_education WHERE resume_id = $1 ORDER BY display_order ASC', [resumeId]);
+        educationDetails = eduRes.rows;
+
+        // Fetch section order
+        const orderRes = await this.db.query('SELECT section_name FROM resume_section_order WHERE resume_id = $1 ORDER BY display_order ASC', [resumeId]);
+        sectionOrder = orderRes.rows.map(r => r.section_name);
+      } else {
+        // Fallback to legacy flat user_skills and user_preferences
+        const skillsRes = await this.db.query('SELECT skill FROM user_skills WHERE user_id = $1', [userId]);
+        skills = skillsRes.rows.map(r => r.skill);
+        
+        educationDetails = (pref.education || []).map(edu => ({
+          institution: 'Education',
+          degree: edu,
+          duration: ''
+        }));
+
+        projectDetails = (pref.projects || []).map(proj => ({
+          title: 'Project',
+          techStack: [],
+          description: proj
+        }));
+      }
 
       return {
         id: user.id,
-        fullName: user.full_name,
+        fullName: user.full_name || user.fullName || '',
         email: user.email,
         phone: user.phone,
+        summary: resumeRes.rows[0]?.summary || undefined,
         skills,
-        experienceYears: pref.experience_years,
-        education: pref.education || [],
-        projects: pref.projects || [],
+        experienceYears: parseFloat(pref.experience_years) || 0,
+        education: educationDetails.map(e => `${e.degree} at ${e.institution}`),
+        projects: projectDetails.map(p => `${p.title}: ${p.description}`),
         achievements: pref.achievements || [],
-        preferredRoles: pref.preferred_roles,
+        preferredRoles: pref.preferred_roles || [],
         preferences: {
-          locations: pref.locations,
-          remote: pref.remote,
-          employmentTypes: pref.employment_types,
+          locations: pref.locations || [],
+          remote: pref.remote !== undefined ? pref.remote : true,
+          employmentTypes: pref.employment_types || [],
         },
+        experience,
+        projectDetails,
+        educationDetails,
+        sectionOrder
       };
     } catch (err) {
       this.logger.error(`[PROFILE] Failed to load user profile: ${err.message}`);
