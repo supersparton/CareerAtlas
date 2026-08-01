@@ -30,7 +30,7 @@ import { MatchingModule } from '../matching/matching.module';
                 port: parsed.port ? parseInt(parsed.port, 10) : 6379,
                 username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
                 password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
-                tls: parsed.protocol === 'rediss:' ? {} : undefined,
+                tls: parsed.protocol === 'rediss:' ? { rejectUnauthorized: false } : undefined,
               },
             };
           } catch (err) {
@@ -43,7 +43,7 @@ import { MatchingModule } from '../matching/matching.module';
             port: parseInt(process.env.REDIS_PORT || '6379', 10),
             password: process.env.REDIS_PASSWORD || undefined,
             username: process.env.REDIS_USERNAME || undefined,
-            tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+            tls: process.env.REDIS_TLS === 'true' ? { rejectUnauthorized: false } : undefined,
           },
         };
       },
