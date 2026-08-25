@@ -1,27 +1,54 @@
+# Environment & secrets
 .env
-docs
-.vscode
-*.json
-techstack.md
-.antigravity
-*.excalidraw
-output
-component_architecture_review.md
-career-watcher
-# Superpower docs
-/.superpowers/*
-.agent/*
-deployment_plan.md
-careeratlas-key.pem
-
-# Ruflo local secrets and runtime data
 .env.local
 .env.*.local
+*.pem
+
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build outputs
+dist/
+.next/
+out/
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug & logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# CareerOS runtime data (agent-managed)
+seen_jobs.json
+processed_jobs.json
+ruvector.db
+
+# Ignore output directory
+output/
+
+# Ignore specific docs
+techstack.md
+component_architecture_review.md
+deployment_plan.md
+
+# Tools
+.antigravity
+*.excalidraw
+career-watcher
+/.superpowers/*
 .claude-flow/*
 .claude/
-# .claude-flow/logs/
-# .claude-flow/sessions/
-.ruvector.db/
+.agents/
 .grok/
 .swarm/
-
+extension
+/ai-context
+docs
+.agent

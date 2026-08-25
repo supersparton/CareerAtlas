@@ -73,12 +73,11 @@ export class IntelligenceWorker extends WorkerHost implements OnApplicationBoots
       const intelMs = Date.now() - intelStart;
       this.logger.error(`[LATENCY-ERROR] [job-intelligence] Intelligence stage failed after ${intelMs}ms for "${job.title}": ${err.message}`);
       
-      // Decrement on failure to prevent pipeline freeze
+      // Decrement on failure to prevent pipeline freeze — do NOT re-throw to avoid BullMQ retry double-decrement
       const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         await this.matchingQueue.add('evaluate', discoveryPayload);
       }
-      throw err;
     }
   }
 }

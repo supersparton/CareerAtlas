@@ -152,7 +152,10 @@ export class CryptoService implements OnModuleInit {
    * Guarantees a 32-byte AES key derived from STORAGE_ENCRYPTION_KEY env
    */
   private getStorageKey(): Buffer {
-    const rawKey = this.configService.get<string>('STORAGE_ENCRYPTION_KEY') || 'careeratlas-storage-encryption-32byte-key!';
+    const rawKey = this.configService.get<string>('STORAGE_ENCRYPTION_KEY');
+    if (!rawKey) {
+      throw new Error('[CRYPTO] STORAGE_ENCRYPTION_KEY environment variable is required. Set it in your .env file.');
+    }
     return crypto.createHash('sha256').update(rawKey).digest();
   }
 

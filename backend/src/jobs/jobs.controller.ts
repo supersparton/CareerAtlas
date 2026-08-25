@@ -51,7 +51,6 @@ export class JobsController {
   private async resolveUser(
     req?: any,
     authHeader?: string,
-    emailQuery?: string,
   ): Promise<{ id: number; email: string } | null> {
     const token = this.extractToken(req, authHeader);
     if (token) {
@@ -60,21 +59,6 @@ export class JobsController {
         if (session.valid && session.user) return session.user;
       } catch {}
     }
-    if (emailQuery && emailQuery.trim() !== '') {
-      const pool = (this.jobsService as any).db.getPool();
-      const userRes = await pool.query(
-        'SELECT id, email FROM users WHERE LOWER(email) = LOWER($1)',
-        [emailQuery.trim()],
-      );
-      if (userRes.rows.length > 0)
-        return { id: userRes.rows[0].id, email: userRes.rows[0].email };
-    }
-    const pool = (this.jobsService as any).db.getPool();
-    const usersRes = await pool.query(
-      'SELECT id, email FROM users ORDER BY id DESC LIMIT 1',
-    );
-    if (usersRes.rows.length > 0)
-      return { id: usersRes.rows[0].id, email: usersRes.rows[0].email };
     return null;
   }
 

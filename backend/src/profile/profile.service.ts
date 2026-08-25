@@ -341,8 +341,18 @@ export class ProfileService {
       throw new Error(`PDF Parsing failed: ${e.message}`);
     }
 
-    if (!pdfText.trim()) {
-      throw new Error('PDF file appears to have no readable text content.');
+    if (!pdfText || pdfText.trim().length < 50) {
+      throw new Error('PDF file appears to have no readable text content (e.g. scanned image PDF). Please upload a PDF with selectable text.');
+    }
+
+    // Senior QA Guardrail: Non-Resume PDF Detection (invoices, bills, tax forms, ebooks)
+    const lowerText = pdfText.toLowerCase();
+    const resumeKeywords = ['experience', 'education', 'skills', 'projects', 'work', 'employment', 'university', 'college', 'bachelor', 'master', 'engineer', 'developer', 'summary', 'profile', 'curriculum', 'vitae', 'resume'];
+    const hasResumeKeywords = resumeKeywords.some(kw => lowerText.includes(kw));
+
+    if (!hasResumeKeywords && lowerText.length > 200) {
+      this.logger.warn(`[PROFILE QA GUARD] Non-resume PDF content detected. Snippet: "${pdfText.substring(0, 150)}..."`);
+      throw new Error('The uploaded document does not appear to be a candidate resume (missing work experience, education, or skills sections). Please upload a valid resume PDF.');
     }
 
     this.emitTaskEvent(taskId, 'running', 'Running AI LLM parsing agent on resume content...');

@@ -81,8 +81,16 @@ export class ProfileController {
     if (!file) {
       throw new Error('No resume file was uploaded.');
     }
-    if (file.mimetype !== 'application/pdf') {
+    if (file.size > 10 * 1024 * 1024) {
+      throw new Error('File size exceeds the maximum allowed limit of 10MB.');
+    }
+    if (file.mimetype !== 'application/pdf' && !file.originalname.toLowerCase().endsWith('.pdf')) {
       throw new Error('Only PDF resume files are accepted.');
+    }
+
+    // Verify PDF Magic Bytes (%PDF- / 0x25 0x50 0x44 0x46)
+    if (!file.buffer || file.buffer.length < 4 || file.buffer.toString('utf8', 0, 4) !== '%PDF') {
+      throw new Error('Invalid file format. The uploaded file is not a valid PDF document.');
     }
 
     const authUser = await this.resolveUser(req, authHeader, bodyEmail);

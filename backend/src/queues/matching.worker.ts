@@ -115,8 +115,8 @@ export class MatchingWorker extends WorkerHost {
       await this.coordinator.updateStep(runId, 'step-7', 'running');
       await this.coordinator.addLog(runId, `Selecting top job matches and generating personalized AI explanations...`);
 
-      // Sort and select top jobs up to the requested limit
-      const sortedJobs = rankedMatches.sort((a, b) => b.finalScore - a.finalScore);
+      // Sort and select top jobs up to the requested limit (spread to avoid mutating original array)
+      const sortedJobs = [...rankedMatches].sort((a, b) => b.finalScore - a.finalScore);
       const topJobs = sortedJobs.slice(0, limit);
 
       // Log ranked jobs

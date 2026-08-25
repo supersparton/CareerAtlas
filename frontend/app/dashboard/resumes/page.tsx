@@ -44,7 +44,10 @@ interface ResumeVersion {
   };
 }
 
+import { useRouter } from "next/navigation";
+
 export default function ResumeManagerPage() {
+  const router = useRouter();
   const [versions, setVersions] = useState<ResumeVersion[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -55,11 +58,11 @@ export default function ResumeManagerPage() {
 
   useEffect(() => {
     if (!isAuthenticated()) {
-      window.location.href = "/login";
+      router.replace("/login");
       return;
     }
     fetchVersions();
-  }, []);
+  }, [router]);
 
   const fetchVersions = async () => {
     setLoading(true);

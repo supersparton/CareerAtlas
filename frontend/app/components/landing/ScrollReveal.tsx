@@ -69,26 +69,36 @@ export function ScrollTextReveal({
 
   const words = text.split(" ");
 
+  // Pre-compute all transforms outside the render loop to comply with Rules of Hooks
+  const wordOpacities = words.map((_, i) => {
+    const start = i / words.length;
+    const end = start + 1 / words.length;
+    return useTransform(scrollYProgress, [start, end], [0.6, 1]);
+  });
+  const wordYs = words.map((_, i) => {
+    const start = i / words.length;
+    const end = start + 1 / words.length;
+    return useTransform(scrollYProgress, [start, end], [8, 0]);
+  });
+  const wordBlurs = words.map((_, i) => {
+    const start = i / words.length;
+    const end = start + 1 / words.length;
+    return useTransform(scrollYProgress, [start, end], ["blur(2px)", "blur(0px)"]);
+  });
+
   return (
     <div ref={containerRef} className={`py-6 md:py-10 text-center max-w-5xl mx-auto px-6 ${className}`}>
       <p className="text-2xl sm:text-4xl md:text-5xl font-extrabold tracking-tight leading-tight flex flex-wrap justify-center gap-x-3 gap-y-2.5">
         {words.map((word, i) => {
-          const start = i / words.length;
-          const end = start + 1 / words.length;
-          // Progressive opacity, y-offset, and crisp unblur per word on scroll
-          const wordOpacity = useTransform(scrollYProgress, [start, end], [0.6, 1]);
-          const wordY = useTransform(scrollYProgress, [start, end], [8, 0]);
-          const wordBlur = useTransform(scrollYProgress, [start, end], ["blur(2px)", "blur(0px)"]);
-
           const isBuiltForPrecision = word.toLowerCase().includes("built") || word.toLowerCase().includes("precision");
 
           return (
             <motion.span
               key={i}
               style={{
-                opacity: wordOpacity,
-                y: wordY,
-                filter: wordBlur,
+                opacity: wordOpacities[i],
+                y: wordYs[i],
+                filter: wordBlurs[i],
               }}
               className={`inline-block transition-all ${
                 isBuiltForPrecision

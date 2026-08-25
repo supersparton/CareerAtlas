@@ -4,7 +4,14 @@ import { Job, generateJobId } from './discovery.service';
 @Injectable()
 export class StartupBoardsAgent {
   private readonly logger = new Logger(StartupBoardsAgent.name);
-  private readonly apiKey = process.env.TINYFISH_API_KEY;
+
+  private getApiKey(): string {
+    const key = process.env.TINYFISH_API_KEY;
+    if (!key) {
+      throw new Error('[STARTUP-BOARDS] TINYFISH_API_KEY environment variable is required.');
+    }
+    return key;
+  }
 
   private getDateFilter(currentCycle = 1): string {
     const days = currentCycle === 1 ? 7 : currentCycle === 2 ? 14 : 30;
@@ -54,7 +61,7 @@ export class StartupBoardsAgent {
   async findJobs(searchTerm: string, locationPref: string, page: number, currentCycle?: number, experienceYears?: number): Promise<Job[]> {
     this.logger.log(`[SCRAPER: STARTUP_BOARDS] Searching for '${searchTerm}' in '${locationPref}' (Page ${page}, Cycle ${currentCycle || 1}, Exp ${experienceYears !== undefined ? experienceYears : 'N/A'})...`);
     
-    if (!this.apiKey) {
+    if (!this.getApiKey()) {
       this.logger.error('[SCRAPER: STARTUP_BOARDS] TINYFISH_API_KEY is not defined in .env. Skipping search.');
       return [];
     }
@@ -79,7 +86,7 @@ export class StartupBoardsAgent {
       let response = await fetch(searchUrl, {
         method: 'GET',
         headers: {
-          'X-API-Key': this.apiKey,
+          'X-API-Key': this.getApiKey(),
         },
         signal: AbortSignal.timeout(8000),
       });
@@ -99,7 +106,7 @@ export class StartupBoardsAgent {
         
         response = await fetch(fallbackUrl, {
           method: 'GET',
-          headers: { 'X-API-Key': this.apiKey },
+          headers: { 'X-API-Key': this.getApiKey() },
           signal: AbortSignal.timeout(8000),
         });
         if (response.ok) {

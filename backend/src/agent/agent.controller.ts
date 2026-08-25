@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, Logger, Query } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus, Logger, Query, Param, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { AgentService } from './agent.service';
 
 export interface StartWorkflowDto {
@@ -38,7 +38,7 @@ export class AgentController {
 
   @Get('agent/history/:sessionId')
   async getSessionResults(
-    @Query('sessionId') sessionId: string,
+    @Param('sessionId') sessionId: string,
     @Query('email') email?: string,
   ) {
     return this.agentService.getSessionResults(parseInt(sessionId, 10), email);
@@ -49,7 +49,7 @@ export class AgentController {
   @HttpCode(HttpStatus.ACCEPTED)
   async runAgent(@Body() body: StartWorkflowDto): Promise<{ message: string; runId: string; searchTerms: string[] }> {
     if (!body.searchTerms || !Array.isArray(body.searchTerms) || body.searchTerms.length === 0) {
-      throw new Error('At least one search title must be specified.');
+      throw new BadRequestException('At least one search title must be specified.');
     }
 
     const searchTerms = body.searchTerms;
@@ -86,6 +86,9 @@ export class AgentController {
   @Post('agent/clear')
   @HttpCode(HttpStatus.OK)
   async clearHistory(@Body('email') email?: string) {
+    if (!email || email.trim() === '') {
+      throw new BadRequestException('Email is required to clear history.');
+    }
     await this.agentService.clearHistory(email);
     return { message: 'History and cache successfully cleared.' };
   }

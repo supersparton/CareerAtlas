@@ -21,8 +21,7 @@ export function getAuthHeaders(): Record<string, string> {
 export function isAuthenticated(): boolean {
   if (typeof window === "undefined") return false;
   const token = localStorage.getItem("careeratlas_token");
-  const user = localStorage.getItem("careeratlas_user");
-  return Boolean(token && user);
+  return Boolean(token);
 }
 
 export async function logout(): Promise<void> {
@@ -31,6 +30,7 @@ export async function logout(): Promise<void> {
   const token = localStorage.getItem("careeratlas_token");
 
   // Call backend logout to clear HTTP-Only session cookie and invalidate DB session
+  // The backend's clearCookie handles removing the HttpOnly cookie — document.cookie cannot
   try {
     await fetch("/api/auth/logout", {
       method: "POST",
@@ -45,7 +45,6 @@ export async function logout(): Promise<void> {
   localStorage.removeItem("careeratlas_token");
   localStorage.removeItem("careeratlas_user");
   localStorage.removeItem("user_email");
-  document.cookie = "careeratlas_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
 
   // Redirect to main landing page
   window.location.href = "/";

@@ -11,6 +11,7 @@ export interface ScrapedJobDetails {
 export class CamoufoxScraperService implements OnModuleDestroy {
   private readonly logger = new Logger(CamoufoxScraperService.name);
   private browser: any = null;
+  private browserInitPromise: Promise<any> | null = null;
 
   async onModuleDestroy() {
     if (this.browser) {
@@ -25,14 +26,27 @@ export class CamoufoxScraperService implements OnModuleDestroy {
   }
 
   private async getBrowser(): Promise<any> {
-    if (!this.browser || typeof this.browser.isConnected !== 'function' || !this.browser.isConnected()) {
+    if (this.browser && typeof this.browser.isConnected === 'function' && this.browser.isConnected()) {
+      return this.browser;
+    }
+    // Prevent race condition: reuse in-flight initialization
+    if (this.browserInitPromise) {
+      return this.browserInitPromise;
+    }
+    this.browserInitPromise = (async () => {
       this.logger.log('[CAMOUFOX] Launching shared anti-detect browser instance...');
+      const isProduction = process.env.NODE_ENV === 'production';
       this.browser = await Camoufox({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: isProduction ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
       });
+      return this.browser;
+    })();
+    try {
+      return await this.browserInitPromise;
+    } finally {
+      this.browserInitPromise = null;
     }
-    return this.browser;
   }
 
   async scrapeUrl(url: string): Promise<ScrapedJobDetails | null> {

@@ -10,7 +10,7 @@ import * as path from 'path';
 @Injectable()
 export class AgentService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AgentService.name);
-  private activeUserId = 1; // Default user ID for single-user environment
+  private defaultUserId = 1; // Fallback user ID for single-user environment
 
   constructor(
     private readonly profileService: ProfileService,
@@ -53,8 +53,8 @@ export class AgentService implements OnApplicationBootstrap {
           },
         };
         const saved = await this.profileService.saveProfileToDb(mappedProfile);
-        this.activeUserId = saved.id || 1;
-        this.logger.log(`[ORCHESTRATOR] Profile synchronized to DB successfully. Active User ID: ${this.activeUserId}`);
+        this.defaultUserId = saved.id || 1;
+        this.logger.log(`[ORCHESTRATOR] Profile synchronized to DB successfully. Active User ID: ${this.defaultUserId}`);
       }
     } catch (err: any) {
       this.logger.warn(`[ORCHESTRATOR] Profile startup sync notice: ${err.message}`);
@@ -115,7 +115,7 @@ export class AgentService implements OnApplicationBootstrap {
   ) {
     this.logger.log(`[ORCHESTRATOR] Executing job recommendation suite for run ID: ${runId}...`);
 
-    let resolvedUserId = this.activeUserId;
+    let resolvedUserId = this.defaultUserId;
     try {
       let userRes;
       if (userEmail) {
@@ -126,7 +126,6 @@ export class AgentService implements OnApplicationBootstrap {
       }
       if (userRes && userRes.rows.length > 0) {
         resolvedUserId = userRes.rows[0].id;
-        this.activeUserId = resolvedUserId;
 
         // Load, update profile, and regenerate Qdrant vector embeddings to reflect updated search parameters
         const profile = await this.profileService.getProfileById(resolvedUserId);
@@ -209,7 +208,7 @@ export class AgentService implements OnApplicationBootstrap {
     runId: string,
   ) {
     try {
-      let resolvedUserId = this.activeUserId;
+      let resolvedUserId = this.defaultUserId;
       if (userEmail) {
         const userRes = await this.db.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [userEmail.trim()]);
         if (userRes.rows.length > 0) resolvedUserId = userRes.rows[0].id;
@@ -231,7 +230,7 @@ export class AgentService implements OnApplicationBootstrap {
 
   async getSearchHistory(email?: string, versionId?: number) {
     try {
-      let resolvedUserId = this.activeUserId;
+      let resolvedUserId = this.defaultUserId;
       if (email) {
         const userRes = await this.db.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
         if (userRes.rows.length > 0) resolvedUserId = userRes.rows[0].id;
@@ -272,7 +271,7 @@ export class AgentService implements OnApplicationBootstrap {
 
   async getSessionResults(sessionId: number, email?: string) {
     try {
-      let resolvedUserId = this.activeUserId;
+      let resolvedUserId = this.defaultUserId;
       if (email) {
         const userRes = await this.db.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
         if (userRes.rows.length > 0) resolvedUserId = userRes.rows[0].id;
@@ -322,7 +321,7 @@ export class AgentService implements OnApplicationBootstrap {
 
   async getWorkflowResults(email?: string) {
     try {
-      let resolvedUserId = this.activeUserId;
+      let resolvedUserId = this.defaultUserId;
       if (email) {
         const userRes = await this.db.query('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
         if (userRes.rows.length > 0) {
@@ -355,7 +354,7 @@ export class AgentService implements OnApplicationBootstrap {
 
   async clearHistory(email?: string) {
     try {
-      let resolvedUserId = this.activeUserId;
+      let resolvedUserId = this.defaultUserId;
       if (email) {
         const userRes = await this.db.query('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
         if (userRes.rows.length > 0) {

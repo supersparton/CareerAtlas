@@ -80,12 +80,11 @@ export class EmbeddingWorker extends WorkerHost {
       const totalMs = Date.now() - embeddingStart;
       this.logger.error(`[LATENCY-ERROR] [job-embedding] Failed to embed and save job after ${totalMs}ms: ${err.message}`);
       
-      // Decrement on failure to prevent pipeline freeze
+      // Decrement on failure to prevent pipeline freeze — do NOT re-throw to avoid BullMQ retry double-decrement
       const isBatchComplete = await this.coordinator.decrementRemainingJobs(runId);
       if (isBatchComplete) {
         await this.matchingQueue.add('evaluate', discoveryPayload);
       }
-      throw err;
     }
   }
 }

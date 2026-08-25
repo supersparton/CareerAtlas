@@ -30,11 +30,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     this.pool = new Pool({
       connectionString,
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '5432', 10),
-      user: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD || 'postgres',
-      database: process.env.DB_NAME || 'careeratlas',
+      // When connectionString is set, pg ignores host/port/user/password/database fields
+      // Defaults are only used for local development without DATABASE_URL
+      host: process.env.DB_HOST || (connectionString ? undefined : 'localhost'),
+      port: connectionString ? undefined : parseInt(process.env.DB_PORT || '5432', 10),
+      user: connectionString ? undefined : (process.env.DB_USER || 'postgres'),
+      password: connectionString ? undefined : (process.env.DB_PASSWORD || 'postgres'),
+      database: connectionString ? undefined : (process.env.DB_NAME || 'careeratlas'),
       max: 13,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,

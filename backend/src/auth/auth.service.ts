@@ -78,7 +78,11 @@ export class AuthService {
   }
 
   private getPepperSecret(): string {
-    return process.env.PEPPER_SECRET || process.env.OTP_PEPPER_SECRET || 'careeratlas-global-application-pepper-secret-key-v1';
+    const pepper = process.env.PEPPER_SECRET || process.env.OTP_PEPPER_SECRET;
+    if (!pepper) {
+      throw new Error('[AUTH] PEPPER_SECRET or OTP_PEPPER_SECRET environment variable is required. Set it in your .env file.');
+    }
+    return pepper;
   }
 
   private hashOtpWithSalt(otp: string, salt: string): string {
@@ -114,8 +118,10 @@ export class AuthService {
           const submittedBuf = Buffer.from(submittedHash, 'hex');
           isMatch = storedBuf.length === submittedBuf.length && crypto.timingSafeEqual(storedBuf, submittedBuf);
         } else {
-          // Backward compatibility fallback for unhashed plaintext legacy Redis keys
-          isMatch = storedPayload === cleanOtp;
+          // Backward compatibility: timing-safe comparison for legacy plaintext OTPs
+          const storedBuf = Buffer.from(storedPayload, 'utf8');
+          const submittedBuf = Buffer.from(cleanOtp, 'utf8');
+          isMatch = storedBuf.length === submittedBuf.length && crypto.timingSafeEqual(storedBuf, submittedBuf);
         }
       } catch (err) {
         isMatch = false;
@@ -158,7 +164,7 @@ export class AuthService {
       }
     } catch (err: any) {
       this.logger.error(`[AUTH] DB user sync failed: ${err.message}`);
-      user = { id: 1, email };
+      throw new HttpException('Unable to authenticate. Database error during user lookup.', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
     // Generate secure session token
@@ -188,7 +194,6 @@ export class AuthService {
       success: true,
       message: 'Login successful.',
       user,
-      token,
       isFirstTime,
       expiresAt: expiresAt.toISOString(),
     };
@@ -249,13 +254,27 @@ export class AuthService {
     if (!token) return { success: true, message: 'Logged out.' };
 
     const cleanToken = token.trim();
+    let redisDeleted = false;
+    let dbDeleted = false;
+
     if (this.redis) {
-      await this.redis.del(`session:${cleanToken}`);
+      try {
+        const result = await this.redis.del(`session:${cleanToken}`);
+        redisDeleted = result > 0;
+      } catch (err: any) {
+        this.logger.error(`[AUTH] Redis session delete failed: ${err.message}`);
+      }
     }
+
     try {
-      await this.databaseService.query('DELETE FROM sessions WHERE session_token = $1', [cleanToken]);
+      const res = await this.databaseService.query('DELETE FROM sessions WHERE session_token = $1', [cleanToken]);
+      dbDeleted = (res.rowCount ?? 0) > 0;
     } catch (err: any) {
-      // Safe fallback
+      this.logger.error(`[AUTH] DB session delete failed: ${err.message}`);
+    }
+
+    if (!redisDeleted && !dbDeleted) {
+      this.logger.debug(`[AUTH] Session ${cleanToken.slice(0, 8)}... was not found in Redis or DB during logout (already expired or invalid)`);
     }
 
     return { success: true, message: 'Logged out successfully.' };
