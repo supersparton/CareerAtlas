@@ -115,8 +115,8 @@ export class MatchingWorker extends WorkerHost {
       await this.coordinator.updateStep(runId, 'step-7', 'running');
       await this.coordinator.addLog(runId, `Selecting top job matches and generating personalized AI explanations...`);
 
-      // Sort and select top jobs up to the requested limit
-      const sortedJobs = rankedMatches.sort((a, b) => b.finalScore - a.finalScore);
+      // Sort and select top jobs up to the requested limit (spread to avoid mutating original array)
+      const sortedJobs = [...rankedMatches].sort((a, b) => b.finalScore - a.finalScore);
       const topJobs = sortedJobs.slice(0, limit);
 
       // Log ranked jobs
@@ -127,6 +127,8 @@ export class MatchingWorker extends WorkerHost {
       this.logger.log(`[MATCHING-WORKER] Selected top ${topJobs.length} matches. Saving recommendation results to database...`);
 
       const profileObj = await this.profileService.getProfileById(userId);
+
+      const batchRecords: any[] = [];
 
       for (const match of topJobs) {
         const { job, finalScore, skillScore, semanticScore, experienceScore, reasoning, matchedSkills, missingSkills } = match;
@@ -174,39 +176,46 @@ export class MatchingWorker extends WorkerHost {
           }
         }
 
-        // Insert into results table, check for duplicate conflicts dynamically
+        batchRecords.push({
+          userId,
+          jobId: job.jobId,
+          company: job.company,
+          title: job.title,
+          location: job.location,
+          source: job.source,
+          url: job.applyUrl || '',
+          score: finalScore,
+          reasoning: aiReasoning,
+          runId,
+          confidenceScore: match.confidenceScore || 0,
+          confidenceFactors: JSON.stringify(match.confidenceFactors || { positive: [], negative: [] }),
+        });
+      }
+
+      // Execute optimized single bulk batch INSERT into results table
+      if (batchRecords.length > 0) {
         try {
-          const insertRes = await this.db.query(`
+          const values: any[] = [];
+          const valueClauses = batchRecords.map((r, idx) => {
+            const offset = idx * 12;
+            values.push(
+              r.userId, r.jobId, r.company, r.title, r.location,
+              r.source, r.url, r.score, r.reasoning, r.runId,
+              r.confidenceScore, r.confidenceFactors
+            );
+            return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, 'notified', $${offset + 10}, $${offset + 11}, $${offset + 12})`;
+          }).join(', ');
+
+          await this.db.query(`
             INSERT INTO results (user_id, job_id, company, title, location, source, url, score, reasoning, status, run_id, confidence_score, confidence_factors)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'notified', $10, $11, $12)
+            VALUES ${valueClauses}
             ON CONFLICT (user_id, job_id) DO NOTHING
-            RETURNING id
-          `, [
-            userId,
-            job.jobId,
-            job.company,
-            job.title,
-            job.location,
-            job.source,
-            job.applyUrl || '',
-            finalScore,
-            aiReasoning,
-            runId,
-            match.confidenceScore || 0,
-            JSON.stringify(match.confidenceFactors || { positive: [], negative: [] })
-          ]);
+          `, values);
 
-          if (insertRes.rowCount === 0) {
-            this.logger.log(`[MATCHING-WORKER] Skipping duplicate save: Job "${job.title}" at "${job.company}" already exists in database.`);
-            await this.coordinator.addLog(runId, `Skipping duplicate: "${job.title}" at "${job.company}" is already saved.`);
-            continue;
-          }
+          await this.coordinator.addLog(runId, `Saved ${batchRecords.length} high-confidence job recommendations in single batch transaction.`);
         } catch (dbErr) {
-          this.logger.error(`[MATCHING-WORKER] Failed to save result match to database: ${dbErr.message}`);
-          continue; 
+          this.logger.error(`[MATCHING-WORKER] Bulk DB insert failed: ${dbErr.message}`);
         }
-
-        await this.coordinator.addLog(runId, `Recommendation result saved successfully for "${job.title}" at ${job.company}.`);
       }
 
       this.logger.log(`Workflow finalizer completed. Top job matches finalized.`);

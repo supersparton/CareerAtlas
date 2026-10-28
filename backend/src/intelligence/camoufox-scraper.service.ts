@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Camoufox } from 'camoufox';
+import { firefox } from 'playwright';
 
 export interface ScrapedJobDetails {
   description: string | null;
@@ -11,6 +12,7 @@ export interface ScrapedJobDetails {
 export class CamoufoxScraperService implements OnModuleDestroy {
   private readonly logger = new Logger(CamoufoxScraperService.name);
   private browser: any = null;
+  private browserInitPromise: Promise<any> | null = null;
 
   async onModuleDestroy() {
     if (this.browser) {
@@ -25,14 +27,37 @@ export class CamoufoxScraperService implements OnModuleDestroy {
   }
 
   private async getBrowser(): Promise<any> {
-    if (!this.browser || typeof this.browser.isConnected !== 'function' || !this.browser.isConnected()) {
-      this.logger.log('[CAMOUFOX] Launching shared anti-detect browser instance...');
-      this.browser = await Camoufox({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
+    if (this.browser && typeof this.browser.isConnected === 'function' && this.browser.isConnected()) {
+      return this.browser;
     }
-    return this.browser;
+    // Prevent race condition: reuse in-flight initialization
+    if (this.browserInitPromise) {
+      return this.browserInitPromise;
+    }
+    this.browserInitPromise = (async () => {
+      this.logger.log('[CAMOUFOX] Launching shared anti-detect browser instance...');
+      const isProduction = process.env.NODE_ENV === 'production';
+      try {
+        this.browser = await Camoufox({
+          headless: true,
+          args: isProduction ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        this.logger.log('[CAMOUFOX] Camoufox browser initialized successfully.');
+      } catch (camoufoxErr: any) {
+        this.logger.warn(`[CAMOUFOX-FALLBACK] Camoufox launch failed (${camoufoxErr.message}). Falling back to Playwright Firefox...`);
+        this.browser = await firefox.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        this.logger.log('[CAMOUFOX-FALLBACK] Playwright Firefox fallback initialized successfully.');
+      }
+      return this.browser;
+    })();
+    try {
+      return await this.browserInitPromise;
+    } finally {
+      this.browserInitPromise = null;
+    }
   }
 
   async scrapeUrl(url: string): Promise<ScrapedJobDetails | null> {

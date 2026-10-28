@@ -134,7 +134,8 @@ export class PipelineCoordinatorService {
         return run.status;
       }
     }
-    return this.defaultStatus;
+    // Return a deep clone to prevent consumers from mutating shared default state
+    return JSON.parse(JSON.stringify(this.defaultStatus));
   }
 
   /* Updates the status of a specific step in a run.*/

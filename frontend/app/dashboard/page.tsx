@@ -12,11 +12,15 @@ import { AppShell } from "../components/AppShell";
 import { ConfirmModal } from "../components/ui/ConfirmModal";
 import { Play, Loader2, Sparkles } from "lucide-react";
 
+import { useRouter } from "next/navigation";
+
 export default function AutonomousAgentWorkspace() {
   return <WorkspaceInner />;
 }
 
 function WorkspaceInner() {
+  const router = useRouter();
+
   // Active Profile & Versions
   const [profile, setProfile] = useState<ParsedProfile | null>(null);
   const [storedVersions, setStoredVersions] = useState<StoredVersion[]>([]);
@@ -39,6 +43,7 @@ function WorkspaceInner() {
   const [finalResponse, setFinalResponse] = useState<string>("");
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
 
   // Systematic Backend Pipeline Stages
@@ -66,7 +71,7 @@ function WorkspaceInner() {
   // Load existing profile, versions, search history, and results on mount
   useEffect(() => {
     if (!isAuthenticated()) {
-      window.location.href = "/login";
+      router.replace("/login");
       return;
     }
     fetchProfile().then(() => {
@@ -74,6 +79,14 @@ function WorkspaceInner() {
       fetchVersions();
       fetchSearchHistory();
     });
+  }, [router]);
+
+  // Cleanup intervals on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
   }, []);
 
   const startThinkingTimer = () => {
@@ -396,7 +409,8 @@ function WorkspaceInner() {
       const activeRunId = runData.runId;
 
       // Real-time backend status polling loop directly synced with PipelineCoordinatorService
-      const pollInterval = setInterval(async () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = setInterval(async () => {
         try {
           const runParam = activeRunId ? `?runId=${encodeURIComponent(activeRunId)}` : "";
           const statusRes = await fetch(`/api/agent/status${runParam}`, {
@@ -436,7 +450,8 @@ function WorkspaceInner() {
             }
 
             if (!backendStatus.active) {
-              clearInterval(pollInterval);
+              clearInterval(pollIntervalRef.current!);
+              pollIntervalRef.current = null;
               stopThinkingTimer();
               setIsSearching(false);
 
@@ -452,7 +467,10 @@ function WorkspaceInner() {
             }
           }
         } catch {
-          clearInterval(pollInterval);
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
           stopThinkingTimer();
           setIsSearching(false);
           fetchResults(activeEmail);

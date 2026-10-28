@@ -443,9 +443,6 @@ ${this.stats.solelyExperienceReject}
         if (cTech >= 0.9) {
           positive.push("Direct skill match for required technologies.");
         }
-        if (similarity >= 0.7) {
-          positive.push("Strong semantic similarity indicates robust contextual alignment.");
-        }
         if (cExp === 1.0 && profile.experienceYears > 0) {
           positive.push("Complete work experience history.");
         }
@@ -461,9 +458,6 @@ ${this.stats.solelyExperienceReject}
         }
         if (hasLocationMismatch) {
           negative.push("Location mismatch with preferred work locations.");
-        }
-        if (cTech < 0.9 && cTech >= 0.6) {
-          negative.push("Required skills matching via ontology transferability instead of direct match.");
         }
         if (cExp < 0.8) {
           negative.push("Missing experience dates or unverified history.");

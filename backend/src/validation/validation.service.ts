@@ -18,7 +18,11 @@ export class ValidationService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      const { TinyFish } = await eval('import("@tiny-fish/sdk")');
+      // Dynamic import via new Function to load ESM-only @tiny-fish/sdk from CJS context.
+      // This is safe because the specifier is a hardcoded string literal, not user input.
+      const dynamicImport = new Function('specifier', 'return import(specifier)');
+      const sdk = await dynamicImport('@tiny-fish/sdk');
+      const TinyFish = sdk.TinyFish;
       this.client = new TinyFish({ apiKey: this.apiKey });
       this.logger.log('[VALIDATION] TinyFish SDK client loaded dynamically.');
     } catch (err: any) {
@@ -122,8 +126,12 @@ export class ValidationService implements OnModuleInit {
     }
 
     if (needsDeepCheck.length === 0 || !this.client) {
+      if (!this.client) {
+        this.logger.warn('[VALIDATION] TinyFish client unavailable — marking jobs needing deep expiry check as expired (fail-closed)');
+      }
       for (const job of needsDeepCheck) {
-        expiredMap.set(job.jobId, false);
+        // Fail-closed: if SDK unavailable, mark unknown jobs as expired to prevent stale data
+        expiredMap.set(job.jobId, !this.client);
       }
       return expiredMap;
     }
@@ -170,8 +178,9 @@ export class ValidationService implements OnModuleInit {
         }
       } catch (err: any) {
         this.logger.error(`[VALIDATION] TinyFish batch getContents failed: ${err.message}`);
+        // Fail-closed: mark jobs as expired when API fails rather than letting stale data through
         for (const job of chunk) {
-          expiredMap.set(job.jobId, false);
+          expiredMap.set(job.jobId, true);
         }
       }
     }
@@ -261,9 +270,10 @@ export class ValidationService implements OnModuleInit {
       return resultMap;
     } catch (err: any) {
       this.logger.error(`[VALIDATION] Exception in validateBatch: ${err.message}`);
+      // Fail-closed: mark all unprocessed jobs as invalid rather than letting stale data through
       for (const job of jobs) {
         if (!resultMap.has(job.jobId)) {
-          resultMap.set(job.jobId, { valid: true, bypassed: false });
+          resultMap.set(job.jobId, { valid: false, reason: `Validation error: ${err.message}` });
         }
       }
       return resultMap;

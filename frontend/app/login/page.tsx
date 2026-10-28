@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mail, ShieldCheck, ArrowRight, AlertCircle, RefreshCw, KeyRound, TrendingUp, Cpu, CheckCircle2 } from "lucide-react";
 import { Skiper106Input } from "@/components/ui/skiper-ui/skiper106";
 import { CareerAtlasLogoMark } from "@/components/ui/CareerAtlasLogoMark";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState<"EMAIL" | "OTP">("EMAIL");
@@ -80,7 +82,10 @@ export default function LoginPage() {
         if (res.ok) {
           const data = await res.json();
           if (data.valid) {
-            window.location.href = "/dashboard";
+            if (data.user) {
+              localStorage.setItem("careeratlas_user", JSON.stringify(data.user));
+            }
+            router.replace("/dashboard");
           }
         }
       } catch (err) {
@@ -88,7 +93,7 @@ export default function LoginPage() {
       }
     }
     checkSession();
-  }, []);
+  }, [router]);
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,12 +118,13 @@ export default function LoginPage() {
 
       if (data.token) {
         localStorage.setItem("careeratlas_token", data.token);
+        document.cookie = `careeratlas_session=${data.token}; path=/; max-age=604800; SameSite=Lax`;
         if (data.user) {
           localStorage.setItem("careeratlas_user", JSON.stringify(data.user));
         }
       }
 
-      window.location.href = "/dashboard";
+      router.replace("/dashboard");
     } catch (err: any) {
       setError(err.message);
     } finally {

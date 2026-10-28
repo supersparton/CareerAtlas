@@ -44,7 +44,10 @@ interface ResumeVersion {
   };
 }
 
+import { useRouter } from "next/navigation";
+
 export default function ResumeManagerPage() {
+  const router = useRouter();
   const [versions, setVersions] = useState<ResumeVersion[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -55,11 +58,11 @@ export default function ResumeManagerPage() {
 
   useEffect(() => {
     if (!isAuthenticated()) {
-      window.location.href = "/login";
+      router.replace("/login");
       return;
     }
     fetchVersions();
-  }, []);
+  }, [router]);
 
   const fetchVersions = async () => {
     setLoading(true);
@@ -84,6 +87,15 @@ export default function ResumeManagerPage() {
   };
 
   const handleActivate = async (id: number) => {
+    // Optimistic UI Update: Instantly mark version as active in state
+    setVersions((prev) =>
+      prev.map((v) => ({
+        ...v,
+        isActive: v.id === id,
+      }))
+    );
+    setStatusMsg("Successfully set version as active!");
+
     try {
       const email = getUserEmail();
       const emailParam = email ? `?email=${encodeURIComponent(email)}` : "";
@@ -91,14 +103,12 @@ export default function ResumeManagerPage() {
         method: "POST",
         headers: getAuthHeaders(),
       });
-      if (res.ok) {
-        setStatusMsg("Successfully set version as active!");
-        fetchVersions();
-      } else {
+      if (!res.ok) {
         throw new Error(await res.text());
       }
     } catch (e: any) {
       setStatusMsg(`Failed to activate version: ${e.message}`);
+      fetchVersions(); // Rollback on failure
     }
   };
 
@@ -109,6 +119,14 @@ export default function ResumeManagerPage() {
 
   const handleSaveRename = async (id: number) => {
     if (!editName.trim()) return;
+    const newName = editName.trim();
+    // Optimistic UI Update for rename
+    setVersions((prev) =>
+      prev.map((v) => (v.id === id ? { ...v, versionName: newName } : v))
+    );
+    setEditingId(null);
+    setStatusMsg("Version renamed successfully.");
+
     try {
       const email = getUserEmail();
       const emailParam = email ? `?email=${encodeURIComponent(email)}` : "";
@@ -118,18 +136,15 @@ export default function ResumeManagerPage() {
           ...getAuthHeaders(),
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ versionName: editName.trim() }),
+        body: JSON.stringify({ versionName: newName }),
       });
 
-      if (res.ok) {
-        setEditingId(null);
-        setStatusMsg("Version renamed successfully.");
-        fetchVersions();
-      } else {
+      if (!res.ok) {
         throw new Error(await res.text());
       }
     } catch (e: any) {
       setStatusMsg(`Failed to rename: ${e.message}`);
+      fetchVersions(); // Rollback on failure
     }
   };
 
@@ -143,6 +158,11 @@ export default function ResumeManagerPage() {
     if (!deleteTarget) return;
     const { id, name } = deleteTarget;
     setDeleteTarget(null);
+
+    // Optimistic UI Update: Instantly remove version from local list
+    setVersions((prev) => prev.filter((v) => v.id !== id));
+    setStatusMsg(`Deleted version "${name}".`);
+
     try {
       const email = getUserEmail();
       const emailParam = email ? `?email=${encodeURIComponent(email)}` : "";
@@ -151,14 +171,12 @@ export default function ResumeManagerPage() {
         headers: getAuthHeaders(),
       });
 
-      if (res.ok) {
-        setStatusMsg(`Deleted version "${name}".`);
-        fetchVersions();
-      } else {
+      if (!res.ok) {
         throw new Error(await res.text());
       }
     } catch (e: any) {
       setStatusMsg(`Failed to delete version: ${e.message}`);
+      fetchVersions(); // Rollback on failure
     }
   };
 

@@ -58,7 +58,12 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: Request, @Res({ passthrough: true }) response: Response, @Headers('authorization') authHeader?: string) {
     const token = this.extractToken(req, authHeader);
-    response.clearCookie('careeratlas_session', { path: '/' });
+    response.clearCookie('careeratlas_session', {
+      path: '/',
+      httpOnly: true,
+      secure: false,
+      sameSite: 'lax',
+    });
     return this.authService.logout(token || '');
   }
 }
