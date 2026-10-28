@@ -6,6 +6,9 @@ const backendUrl =
   "http://localhost:3001";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    optimizePackageImports: ["lucide-react", "framer-motion"],
+  },
   async rewrites() {
     return [
       {

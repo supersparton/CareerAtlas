@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Camoufox } from 'camoufox';
+import { firefox } from 'playwright';
 
 export interface ScrapedJobDetails {
   description: string | null;
@@ -36,10 +37,20 @@ export class CamoufoxScraperService implements OnModuleDestroy {
     this.browserInitPromise = (async () => {
       this.logger.log('[CAMOUFOX] Launching shared anti-detect browser instance...');
       const isProduction = process.env.NODE_ENV === 'production';
-      this.browser = await Camoufox({
-        headless: true,
-        args: isProduction ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
+      try {
+        this.browser = await Camoufox({
+          headless: true,
+          args: isProduction ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        this.logger.log('[CAMOUFOX] Camoufox browser initialized successfully.');
+      } catch (camoufoxErr: any) {
+        this.logger.warn(`[CAMOUFOX-FALLBACK] Camoufox launch failed (${camoufoxErr.message}). Falling back to Playwright Firefox...`);
+        this.browser = await firefox.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        this.logger.log('[CAMOUFOX-FALLBACK] Playwright Firefox fallback initialized successfully.');
+      }
       return this.browser;
     })();
     try {

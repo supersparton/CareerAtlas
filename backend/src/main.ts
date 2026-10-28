@@ -4,9 +4,12 @@ import { AppModule } from './app.module';
 import { ExecutionLogger } from './logger/execution-logger';
 import cookieParser from 'cookie-parser';
 
+import compression from 'compression';
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useLogger(new ExecutionLogger());
+  app.use(compression());
 
   // Parse HTTP-only cookies (careeratlas_session)
   const parseCookies = typeof cookieParser === 'function' ? cookieParser : (cookieParser as any)?.default || require('cookie-parser');
